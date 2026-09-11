@@ -1,0 +1,27 @@
+chain_id,action,target,value,branch,note
+gyeongui,rename,디엠시,디지털미디어시티,,약칭
+ansangwacheon,rename,신길온천,능길,,옛 역명 — 역 파일은 능길
+seoul2,loop,,,,순환선 — 끝(충정로) 다음은 처음(시청)
+seoul2:성수지선,insert_before,용답,성수,,원천 목록에 분기역이 없다
+seoul2:신정지선,insert_before,도림천,신도림,,원천 목록에 분기역이 없다
+seoul5,branch,강동,둔촌동|올림픽공원|방이|오금|개롱|거여|마천,마천,원천은 하남검단산 뒤에 마천 지선을 이어 적었다
+seoul6,insert_after,구산,응암,,응암순환(응암→역촌→불광→독바위→연신내→구산→응암) — 새절은 응암과 이어진다
+incheon7,insert_before,까치울,온수,,7호선 본선과 잇는 역
+seoul8,insert_before,암사역사공원,동구릉|구리|장자호수공원,,별내선 연장 구간이 원천에 없다
+metro8,insert_before,다산,동구릉,,8호선 본선과 잇는 역
+jinjeop,insert_after,별내별가람,불암산,,4호선 본선과 잇는 역
+ansangwacheon,insert_before,선바위,남태령,,4호선 본선과 잇는 역 (원천 기점명이 남태령)
+ansangwacheon,insert_after,범계,금정,,원천 목록에 금정이 없다 (범계→산본 3.9 km 로 건너뛴다)
+bundang,insert_before,서울숲,청량리|왕십리,,왕십리·청량리 연장 구간이 원천에 없다 (원천 기점명은 왕십리)
+suin,insert_before,고색,수원,,분당선과 잇는 역 (수인분당선 직통)
+suin,insert_after,사리,한대앞|중앙|고잔|초지|안산|능길|정왕|오이도,,안산과천선과 함께 쓰는 구간이 원천에 없다 (사리→달월 14 km 로 건너뛴다)
+gyeongin,insert_before,구일,구로,,경부선과 잇는 역
+gyeongbu,branch,금천구청,광명,광명,원천은 광명을 독산과 금천구청 사이에 적었다 (금천구청–광명 지선)
+gyeongbu,branch,병점,서동탄,서동탄,원천은 서동탄을 병점과 세마 사이에 적었다 (병점–서동탄 지선)
+gyeongui,move_before,가좌,홍대입구,,원천은 가좌를 효창공원앞 뒤에 적었다 — 디지털미디어시티→가좌→홍대입구
+gyeongui,branch,가좌,신촌|서울,서울역,가좌–신촌–서울역 지선
+gyeongui,insert_after,효창공원앞,용산|이촌|서빙고|한남|옥수|응봉|왕십리|청량리|회기,,용산–회기 구간(경원선 선로)이 원천에 없다 (서울역→중랑 10.5 km 로 건너뛴다)
+gyeongui,insert_after,곡산,대곡,,원천 목록에 대곡이 없다 (곡산→능곡 3.4 km)
+gyeongchun,insert_before,신내,청량리|회기|중랑|상봉|망우,,원천 목록이 신내부터다 — 노선도: 청량리–회기–중랑–상봉–망우–신내
+gyeongchun,branch,상봉,광운대,광운대,노선도: 상봉–광운대 지선 (광운대가 종점 중 하나)
+seohae,insert_before,김포공항,일산|풍산|백마|곡산|대곡|능곡,,일산 연장 구간이 원천에 없다

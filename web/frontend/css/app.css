@@ -1,0 +1,511 @@
+/* 바로가 1차 시각화 — 왼쪽 사이드바(360 px) + 지도 */
+
+/* 색은 전부 여기 변수로 — 밝은 화면(기본)과 다크 모드(html[data-theme="dark"])가 값만 바꾼다 */
+:root {
+  color-scheme: light;
+  --ink: #212121;
+  --ink-2: #424242;       /* 보조 글자 (요약 줄 등) */
+  --muted: #6b6b6b;
+  --faint: #9e9e9e;       /* 더 옅은 글자 (칩 사이 ›) */
+  --line: #e3e3e3;
+  --line-soft: #eee;
+  --panel: #fafafa;       /* 사이드바 바탕 */
+  --surface: #fff;        /* 카드·머리말·팝업 바탕 */
+  --surface-2: #F5F5F5;   /* 안내 상자 */
+  --hover: #f2f2f2;
+  --border: #d6d6d6;      /* 카드 테두리 */
+  --border-strong: #c8c8c8; /* 버튼·탭 테두리 */
+  --border-hover: #9e9e9e;
+  --accent: #1565C0;
+  --sel-ring: rgba(21, 101, 192, 0.25);
+  --sel-bg: #eef3fb;
+  --ok: #2E7D32;
+  --warn: #EF6C00;
+  --bad: #C62828;
+  --ok-bg: #E8F5E9;
+  --warn-bg: #FFF3E0;
+  --bad-bg: #FFEBEE;
+  --caution-bg: #FFF8E1;
+  --rail: #d0d0d0;        /* 타임라인 옅은 연결선 */
+  --rail-strong: #bdbdbd;
+  --dot-border: #616161;
+  --walk: #9e9e9e;
+  --track: #e6e6e6;       /* 쿼터 막대 */
+  --label-bg: rgba(255, 255, 255, 0.92);
+  --label-ring: rgba(0, 0, 0, 0.25);
+  --route-casing: #FFFFFF; /* 지도 경로 선 테두리 */
+  --route-walk: #757575;   /* 지도 도보 점선 */
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #e4e6e9;
+  --ink-2: #c4c8cd;
+  --muted: #9aa0a6;
+  --faint: #7b828b;
+  --line: #3a3f46;
+  --line-soft: #33383f;
+  --panel: #1b1e23;
+  --surface: #252930;
+  --surface-2: #2e333a;
+  --hover: #30353c;
+  --border: #434951;
+  --border-strong: #515861;
+  --border-hover: #7b828b;
+  --accent: #4a90e2;
+  --sel-ring: rgba(74, 144, 226, 0.35);
+  --sel-bg: rgba(74, 144, 226, 0.16);
+  --ok: #66bb6a;
+  --warn: #ffa726;
+  --bad: #ef5350;
+  --ok-bg: rgba(102, 187, 106, 0.16);
+  --warn-bg: rgba(255, 167, 38, 0.16);
+  --bad-bg: rgba(239, 83, 80, 0.16);
+  --caution-bg: rgba(249, 168, 37, 0.14);
+  --rail: #4a5058;
+  --rail-strong: #5f666e;
+  --dot-border: #9aa0a6;
+  --walk: #858c95;
+  --track: #3a3f46;
+  --label-bg: rgba(30, 34, 39, 0.9);
+  --label-ring: rgba(255, 255, 255, 0.2);
+  --route-casing: #101317;
+  --route-walk: #b4bac1;
+}
+
+[hidden] { display: none !important; }
+
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex;
+  color: var(--ink);
+  background: var(--panel);
+  font: 13px/1.45 system-ui, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+}
+
+#sidebar {
+  flex: 0 0 360px;
+  width: 360px;
+  overflow-y: auto;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+}
+#map { flex: 1; min-width: 0; height: 100%; }
+
+.brand { padding: 12px 14px 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.brand h1 { margin: 0; font-size: 18px; display: flex; align-items: center; gap: 6px; }
+.info-btn { border: 0; background: none; padding: 0 2px; font-size: 15px; line-height: 1; color: var(--muted);
+            cursor: pointer; }
+.info-btn:hover, .info-btn[aria-expanded="true"] { color: var(--accent); }
+.brand p { margin: 6px 0 0; padding: 6px 8px; background: var(--surface-2); border-radius: 4px; }
+
+section { padding: 10px 14px 12px; border-bottom: 1px solid var(--line); }
+section h2 { margin: 0 0 6px; font-size: 13px; }
+section h3 { margin: 10px 0 4px; font-size: 12px; }
+/* 한 섹션 안의 소구분 (경로 검색 결과 → 대중교통 / 택시) */
+.subsec > h3 { margin: 6px 0 4px; font-size: 12px; color: var(--ink-2); }
+.subsec + .subsec { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--line); }
+
+.muted { color: var(--muted); margin: 4px 0; }
+.hint { margin: 0 0 6px; color: var(--muted); }
+.note { margin: 4px 0; padding: 6px 8px; background: var(--surface-2); border-radius: 4px; }
+small { color: var(--muted); }
+/* 화면에는 안 보이고 화면 낭독기만 읽는 글 (검색 목록의 "결과가 없습니다"·오류 문구 알림) */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* 검색 — 주소·장소 검색창(결과 목록은 칸 아래에 겹쳐 뜬다) + 출발·도착 이름.
+   출발 / 바꾸기(↕) / 도착 세 줄: 표지와 바꾸기는 왼쪽 칸 — 바꾸기가 제 줄을 차지해 두 줄 사이가 벌어진다 */
+.place-search { margin: 0 0 8px; }
+.od-fields { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; margin: 0 0 8px; align-items: center; }
+.od-fields > .pin, .od-swap { grid-column: 1; }
+.od-swap {
+  justify-self: center; display: grid; place-items: center; width: 22px; height: 22px; margin: 2px 0; padding: 0;
+  border: 1px solid var(--border-strong); border-radius: 50%; background: var(--surface); color: var(--muted); cursor: pointer;
+}
+.od-swap:hover, .od-swap:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+/* 고른 출발·도착 이름 (길면 말줄임) + 오른쪽 × */
+.od-val { display: flex; align-items: center; gap: 4px; min-width: 0; min-height: 26px; }
+.od-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.od-name:empty::before { content: "미선택"; color: var(--faint); }
+.od-clear {
+  flex: 0 0 auto; width: 20px; height: 20px; padding: 0;
+  border: 0; border-radius: 50%; background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.od-clear:hover, .od-clear:focus-visible { color: var(--ink); background: var(--hover); outline: none; }
+.od-name:empty + .od-clear { display: none; } /* 비었으면 지울 것이 없다 */
+.ac { position: relative; min-width: 0; }
+.ac input {
+  width: 100%; box-sizing: border-box; padding: 5px 8px; font: inherit; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--border-strong); border-radius: 4px;
+}
+.ac input::placeholder { color: var(--faint); }
+.ac input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--sel-ring); }
+.ac-list {
+  position: absolute; z-index: 1100; top: calc(100% + 2px); left: 0; right: 0; max-height: 320px; overflow-y: auto;
+  margin: 0; padding: 4px 0; list-style: none; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+}
+.ac-item { padding: 5px 10px; cursor: pointer; }
+/* 고른 항목(Enter 가 고를 것): 옅은 바탕만으로는 잘 안 보여 왼쪽 강조선도. 고대비 모드는 바탕·그림자를 지우므로 시스템 강조색 외곽선 */
+.ac-item[aria-selected="true"] { background: var(--sel-bg); box-shadow: inset 3px 0 0 var(--accent); }
+@media (forced-colors: active) {
+  .ac-item[aria-selected="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+.ac-name { font-weight: 600; overflow-wrap: anywhere; }
+.ac-detail { margin-left: 6px; font-size: 11px; color: var(--muted); }
+.ac-addr { display: block; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.ac-msg { padding: 5px 10px; color: var(--muted); }
+.ac-msg.ac-warn { color: var(--warn); font-size: 12px; }
+.ac-msg.ac-err { color: var(--bad); }
+.buttons { display: flex; gap: 6px; }
+.buttons button {
+  padding: 5px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.buttons button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+.buttons button:disabled { opacity: 0.5; cursor: default; }
+
+/* 출발/도착 표지 (지도 마커와 사이드바 공용 색) */
+.od-origin { --od: #2E7D32; }
+.od-dest { --od: #C62828; }
+.pin, .od-marker {
+  display: inline-block;
+  background: var(--od);
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  text-align: center;
+  border-radius: 4px;
+}
+.pin { padding: 0 6px; line-height: 20px; }
+.od-marker { line-height: 24px; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
+.od-marker::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  margin-left: -6px;
+  border: 6px solid transparent;
+  border-bottom: 0;
+  border-top-color: var(--od);
+}
+
+/* 대중교통 결과: 종류별 탭 + 정렬 */
+.rt-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+.rt-tab {
+  padding: 2px 9px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface);
+  font: inherit; font-size: 12px; color: inherit; cursor: pointer;
+}
+.rt-tab:hover { border-color: var(--border-hover); }
+.rt-tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.rt-n { margin-left: 4px; font-variant-numeric: tabular-nums; opacity: 0.75; }
+.rt-sort { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; color: var(--muted); }
+.rt-sort select { font: inherit; color: var(--ink); }
+
+/* 경로 카드 */
+.route-card {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 6px 0;
+  padding: 8px 10px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.route-card { padding: 0; }
+.route-card:hover { border-color: var(--border-hover); }
+.route-card.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--sel-ring); }
+.rc-head {
+  display: block; width: 100%; box-sizing: border-box; padding: 8px 10px;
+  text-align: left; font: inherit; color: inherit; background: none; border: 0; border-radius: 6px; cursor: pointer;
+}
+.rc-detail { padding: 2px 10px 8px; border-top: 1px solid var(--line); }
+
+/* 구간 타임라인 (펼친 카드) — 왼쪽 레일에 점·선, 오른쪽에 이름·구간 정보 */
+.tl { list-style: none; margin: 6px 0 0; padding: 0; }
+.tl > li { display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; }
+.tl-rail { position: relative; display: flex; justify-content: center; }
+.tl-node .tl-rail { align-items: center; }
+.tl-node .tl-rail::before { /* 점 뒤를 지나는 옅은 연결선 — 처음·끝 점에서는 반만 */
+  content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--rail);
+}
+.tl-node:first-child .tl-rail::before { top: 50%; }
+.tl-node:last-child .tl-rail::before { bottom: 50%; }
+.tl-dot {
+  position: relative; z-index: 1; width: 10px; height: 10px; box-sizing: border-box;
+  border: 2px solid var(--dot-border); border-radius: 50%; background: var(--surface);
+}
+.tl-end .tl-dot { background: var(--accent); border-color: var(--accent); }
+.tl-name { font-weight: 600; padding: 2px 0; }
+.tl-end .tl-name { color: var(--accent); }
+.tl-line { width: 4px; min-height: 22px; border-radius: 2px; background: var(--rail-strong); }
+.tl-walk .tl-line { width: 0; border-radius: 0; background: none; border-left: 3px dotted var(--walk); }
+.tl-missing .tl-line { border-left-color: var(--rail); }
+.tl-missing .tl-meta { color: var(--walk); font-style: italic; }
+.tl-info { padding: 3px 0 5px; min-width: 0; }
+.tl-toggle {
+  display: block; width: calc(100% + 8px); margin-left: -4px; padding: 3px 4px; box-sizing: border-box;
+  text-align: left; font: inherit; color: inherit; background: none; border: 0; border-radius: 4px; cursor: pointer;
+}
+.tl-toggle:hover:not(:disabled) { background: var(--hover); }
+.tl-toggle[aria-expanded="true"] { background: var(--sel-bg); }
+.tl-toggle:disabled { cursor: default; }
+.tl-vehs { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; }
+.tl-veh { display: inline-flex; align-items: center; gap: 3px; }
+.tl-vtype { font-size: 11px; color: var(--muted); }
+.tl-meta { display: block; margin-top: 1px; font-size: 12px; color: var(--ink-2); }
+
+/* 구간의 역 목록 — 한 줄에 4개씩 ㄹ자(홀수 줄은 오른쪽 → 왼쪽). 줄 끝은 바깥으로 둥글게 꺾이는 선이 다음 줄로 잇는다 */
+.strip { margin: 4px 0 2px; }
+.strip-snake { --gap: 6px; padding: 2px 12px 4px; } /* 좌우 12 px = 꺾이는 선 자리 */
+.strip-row { position: relative; display: flex; list-style: none; margin: 0; padding: 0; }
+.strip-row + .strip-row { margin-top: var(--gap); }
+.strip-row.rtl { flex-direction: row-reverse; } /* 줄이 덜 차도 오른쪽부터 — 앞 줄이 꺾여 내려온 자리에서 시작 */
+.strip-row > li { position: relative; flex: 0 0 25%; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+.strip-row > li.l::before,
+.strip-row > li.r::after { content: ""; position: absolute; top: 9px; height: 3px; background: var(--c); }
+.strip-row > li.l::before { left: 0; right: 50%; }
+.strip-row > li.r::after { left: 50%; right: 0; }
+.strip-row.turn::after { /* 끝 역의 점(칸 가운데)에서 바깥으로 나가 다음 줄 같은 자리 점까지 — 높이 = 이 줄 높이 + 줄 간격 + 선 두께 */
+  content: ""; position: absolute; top: 9px; height: calc(100% + var(--gap) + 3px); box-sizing: border-box;
+  border: 3px solid var(--c);
+}
+.strip-row.turn:not(.rtl)::after { left: 87.5%; right: -10px; border-left: 0; border-radius: 0 14px 14px 0; }
+.strip-row.turn.rtl::after { right: 87.5%; left: -10px; border-right: 0; border-radius: 14px 0 0 14px; }
+.strip-dot {
+  position: relative; z-index: 1; width: 10px; height: 10px; margin-top: 5.5px; box-sizing: border-box;
+  border: 2px solid var(--c); border-radius: 50%; background: var(--surface);
+}
+.strip-end .strip-dot { background: var(--c); }
+.strip-name {
+  margin-top: 3px; padding: 0 2px; font-size: 11px; line-height: 1.25; text-align: center;
+  word-break: keep-all; overflow-wrap: anywhere;
+}
+.strip-end .strip-name { font-weight: 700; }
+.rc-top, .rc-meta, .rc-chips { display: block; }
+.rc-top { display: flex; align-items: center; gap: 8px; }
+.rc-type { font-size: 13px; }
+.rc-time { font-size: 15px; margin-right: auto; }
+.rc-meta { color: var(--ink-2); margin-top: 2px; }
+.rc-chips { margin-top: 4px; }
+.chip {
+  display: inline-block;
+  padding: 0 6px;
+  margin: 2px 0;
+  border-radius: 9px;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.35);
+}
+.chip-sep { color: var(--faint); margin: 0 3px; }
+.badge { padding: 0 6px; border-radius: 9px; font-size: 11px; line-height: 18px; font-weight: 600; }
+.badge.ok { background: var(--ok-bg); color: var(--ok); }
+.badge.warn { background: var(--warn-bg); color: var(--warn); }
+.badge.bad { background: var(--bad-bg); color: var(--bad); }
+
+/* 오류 상자 */
+.err {
+  position: relative;
+  margin: 6px 0;
+  padding: 8px 10px;
+  border-left: 4px solid var(--bad);
+  border-radius: 4px;
+  background: var(--bad-bg);
+}
+.err p { margin: 4px 0 0; }
+.err small { display: block; margin-top: 4px; }
+.err-warn { border-left-color: #F9A825; background: var(--caution-bg); }
+.err-boxed { border: 2px solid var(--bad); background: var(--surface); }
+.err-boxed a { font-weight: 600; color: var(--accent); }
+#banners .err { margin: 8px 14px; }
+#banners .err strong { padding-right: 16px; }
+.err-close {
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  border: 0;
+  background: none;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* 매칭 진단 */
+.legend { margin: 0 0 6px; color: var(--muted); font-size: 12px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin: 0 3px 0 6px; vertical-align: -1px; }
+.dot-matched { background: var(--ok); }
+.dot-ambiguous { background: var(--warn); }
+.dot-unmatched { border: 2px solid var(--bad); width: 5px; height: 5px; }
+table.diag { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+table.diag th, table.diag td { padding: 3px 4px; border-bottom: 1px solid var(--line-soft); text-align: right; }
+table.diag th:first-child { text-align: left; font-weight: 400; color: var(--ink-2); }
+table.diag thead th { font-weight: 600; color: var(--ink); }
+ol.stops { margin: 0; padding-left: 0; list-style: none; font-size: 12px; }
+ol.stops li { margin: 3px 0; padding-left: 14px; position: relative; word-break: keep-all; overflow-wrap: anywhere; }
+.st::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rail-strong);
+}
+.st-matched::before { background: var(--ok); }
+.st-ambiguous::before { background: var(--warn); }
+.st-unmatched::before { background: none; border: 2px solid var(--bad); width: 4px; height: 4px; }
+.st-step { color: var(--muted); }
+details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; cursor: pointer; }
+
+/* 접는 섹션 제목 (프로브 · 쿼터) */
+#probe summary, #quota summary { font-weight: 600; cursor: pointer; }
+
+/* 프로브 */
+.probe-opt { display: block; margin: 6px 0 2px; cursor: pointer; }
+#probe pre {
+  max-height: 360px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 6px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: 11px;
+}
+
+/* 쿼터 */
+.quota-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.q-label { flex: 0 0 64px; }
+.q-bar { flex: 1; height: 8px; background: var(--track); border-radius: 4px; overflow: hidden; }
+.q-fill { display: block; height: 100%; background: var(--accent); }
+.q-num { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.quota-row.full .q-fill { background: var(--bad); }
+.quota-row.full .q-num { color: var(--bad); font-weight: 700; }
+
+/* 지도 위 컨트롤·팝업 */
+.map-hint {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+  background: rgba(33, 33, 33, 0.8);
+  color: #fff;
+}
+/* 노선 강조 중 — 지도 왼쪽 아래 "[380] 경기 일반 버스 · 정류장 54곳 ×" (왼쪽 띠·번호 칩 = 노선 유형 색 --c, × = 강조 끄기) */
+.hl-bar {
+  display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 8px; border-left: 4px solid var(--c, var(--border-strong));
+  border-radius: 4px; font-size: 12px; background: var(--surface); color: var(--ink); box-shadow: 0 1px 5px rgba(0, 0, 0, 0.35);
+}
+.hl-bar .chip { margin: 0 2px 0 0; font-weight: 700; }
+.hl-close {
+  width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer;
+}
+.hl-close:hover, .hl-close:focus-visible { color: var(--ink); background: var(--hover); outline: none; }
+/* 레이어 목록의 하위 항목 (미정차 표시 ⊂ 버스 정류장, 매칭 진단 ⊂ 경로) — 들여 쓰고 └ 로 묶음 */
+.leaflet-control-layers label.layers-sub { position: relative; padding-left: 18px; }
+.leaflet-control-layers label.layers-sub::before { content: "└"; position: absolute; left: 4px; top: 0; color: var(--faint); }
+/* 다크 모드 버튼 — 지도 오른쪽 아래(출처 표기 위), 어두운 원에 흰 해·달 */
+.theme-btn {
+  display: flex; align-items: center; justify-content: center; width: 38px; height: 38px; padding: 0;
+  border: 0; border-radius: 50%; background: #2f3237; color: #fff; cursor: pointer;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.4);
+}
+[data-theme="dark"] .theme-btn { background: #fff; color: #000; box-shadow: 0 1px 5px rgba(0, 0, 0, 0.5); } /* 다크: 흰 원에 검은 해 */
+.theme-btn:hover { filter: brightness(1.25); }
+[data-theme="dark"] .theme-btn:hover { filter: brightness(0.9); }
+.theme-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.theme-btn svg { display: block; }
+.theme-btn .ti-sun, [data-theme="dark"] .theme-btn .ti-moon { display: none; } /* 밝은 화면: 달(→ 다크), 다크: 해(→ 밝게) */
+[data-theme="dark"] .theme-btn .ti-sun { display: block; }
+.pop h3 { margin: 0 0 4px; font-size: 14px; }
+.pop dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; margin: 0; }
+.pop dt { color: var(--muted); }
+.pop dd { margin: 0; }
+.pop .diff { color: var(--bad); font-weight: 600; }
+.pop .warn, .warn { color: var(--warn); }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: 0; }
+
+/* 지도 클릭 메뉴 — [출발] [도착], 정류장이면 이름 + ⓘ(마우스를 올리면 정보 카드) */
+.odm-popup .leaflet-popup-content { margin: 8px 22px 8px 10px; } /* 오른쪽은 × 닫기 버튼 자리 */
+/* 메뉴 꼬리는 누른 점 바로 위에 걸친다 — 클릭을 받으면 더블클릭의 둘째 클릭을 가로채 확대가 안 된다 */
+.odm-popup .leaflet-popup-tip { pointer-events: none; }
+.odm { position: relative; }
+.odm-head { display: flex; align-items: flex-start; gap: 2px; margin-bottom: 6px; font-size: 13px; }
+.odm-head b { min-width: 0; word-break: keep-all; overflow-wrap: anywhere; } /* 긴 이름은 줄바꿈 — ⓘ 가 메뉴 밖으로 밀리지 않게 */
+.odm-head .swatch { flex: 0 0 auto; margin: 4px 4px 0 0; }
+.odm-head .odm-line { flex: 0 0 auto; margin: 0 5px 0 0; white-space: nowrap; } /* 지하철: 역 이름 앞 노선 칩 */
+.odm-i { flex: 0 0 auto; border: 0; background: none; padding: 0 2px; font-size: 14px; line-height: 1.3; color: var(--muted); cursor: help; }
+.odm-i:hover, .odm-i:focus-visible { color: var(--accent); }
+.odm-card { /* 위치는 app.js 가 지도 안에 맞춰 정한다 */
+  position: absolute; top: 0; left: 0; z-index: 1; width: 250px; box-sizing: border-box; pointer-events: none;
+  padding: 8px 10px; background: var(--surface); color: var(--ink); border-radius: 6px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35); font-size: 12px;
+}
+.odm-card p { margin: 0; overflow-wrap: anywhere; }
+.odm-btns { display: flex; gap: 6px; }
+.odm-btns button { padding: 2px 12px; border: 0; font-family: inherit; line-height: 22px; cursor: pointer; }
+.odm-btns button:hover { filter: brightness(1.12); }
+/* 버스 정류장 메뉴의 경유 노선 칩 — 누르면 그 노선의 정류장을 지도에 강조. 많으면(최대 100여 개) 칸 안에서 스크롤 */
+.odm-routes { min-width: 200px; margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.odm .odm-routes-msg { margin: 0 0 4px; font-size: 12px; color: var(--muted); } /* .odm 을 붙여 Leaflet 팝업 p 여백(1.3em)을 이긴다 */
+/* 칩 사방 4px 여유 — 강조 중 칩의 바깥 링이 스크롤 칸 가장자리에서 잘리지 않게(음수 여백으로 제자리) */
+.odm-chips { display: flex; flex-wrap: wrap; gap: 3px; max-height: 132px; overflow-y: auto; padding: 4px; margin: -4px -4px 0; }
+/* 칩 바탕은 노선 유형 색(style — 경로 결과 칩과 같은 색·모양), 강조 중인 노선은 같은 유형 색(--c)의 바깥 링 */
+.route-chip {
+  padding: 0 6px; border: 0; border-radius: 9px; color: #fff; text-shadow: 0 0 2px rgba(0, 0, 0, 0.35);
+  font: inherit; font-size: 11px; line-height: 18px; cursor: pointer;
+}
+.route-chip:hover { filter: brightness(1.12); }
+.route-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.route-chip[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--c); }
+
+/* 선택 경로의 정류장·역 이름표 (겹치면 routes.js 가 숨긴다) */
+.leaflet-tooltip.stop-label {
+  padding: 0 4px; font-size: 11px; line-height: 16px; color: var(--ink);
+  background: var(--label-bg); border: 0; border-radius: 3px; box-shadow: 0 0 0 1px var(--label-ring);
+}
+.leaflet-tooltip.stop-label::before { display: none; }
+.leaflet-tooltip.stop-label.end { font-size: 12px; font-weight: 700; }
+.leaflet-tooltip.stop-label.approx { color: var(--muted); font-style: italic; }
+
+/* 지도 경로 선 — 테마에 따라 CSS 가 색을 정한다 (SVG 의 stroke 속성보다 CSS 가 우선) */
+.leaflet-pane path.route-casing { stroke: var(--route-casing); }
+.leaflet-pane path.route-walk { stroke: var(--route-walk); }
+
+/* 다크 모드: Leaflet 기본 컨트롤·팝업·툴팁 */
+[data-theme="dark"] .leaflet-container { background: #15181c; }
+[data-theme="dark"] .leaflet-bar a,
+[data-theme="dark"] .leaflet-bar a:hover { background: var(--surface); color: var(--ink); border-bottom-color: var(--line); }
+[data-theme="dark"] .leaflet-bar a:hover { background: var(--hover); }
+[data-theme="dark"] .leaflet-bar a.leaflet-disabled { background: var(--surface-2); color: var(--muted); }
+[data-theme="dark"] .leaflet-control-layers { background: var(--surface); color: var(--ink); }
+[data-theme="dark"] .leaflet-control-layers-separator { border-top-color: var(--line); }
+[data-theme="dark"] .leaflet-control-attribution { background: rgba(27, 30, 35, 0.85); color: var(--muted); }
+[data-theme="dark"] .leaflet-control-attribution a { color: #8ab4f8; }
+[data-theme="dark"] .leaflet-popup-content-wrapper,
+[data-theme="dark"] .leaflet-popup-tip { background: var(--surface); color: var(--ink); }
+[data-theme="dark"] .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
+[data-theme="dark"] .leaflet-tooltip:not(.stop-label) { background: var(--surface); color: var(--ink); border-color: var(--line); }
+[data-theme="dark"] .leaflet-tooltip-top::before { border-top-color: var(--surface); }
+[data-theme="dark"] .leaflet-tooltip-bottom::before { border-bottom-color: var(--surface); }
+[data-theme="dark"] .leaflet-tooltip-left::before { border-left-color: var(--surface); }
+[data-theme="dark"] .leaflet-tooltip-right::before { border-right-color: var(--surface); }
+
+@media (max-width: 720px) {
+  body { flex-direction: column; }
+  #sidebar { flex: 0 0 45%; width: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+}

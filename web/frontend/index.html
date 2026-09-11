@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>바로가</title>
+<script>
+  // 화면 테마를 그리기 전에 정한다(밝은 화면이 번쩍이지 않게): 저장한 선택 → 없으면 운영체제 설정. 저장소엔 테마만 둔다.
+  try {
+    const t = localStorage.getItem("baroga-theme");
+    const dark = t ? t === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  } catch { document.documentElement.dataset.theme = "light"; }
+</script>
+<link rel="stylesheet" href="vendor/leaflet-1.9.4/leaflet.css">
+<link rel="stylesheet" href="css/app.css">
+<script src="vendor/leaflet-1.9.4/leaflet.js"></script>
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<aside id="sidebar">
+  <header class="brand">
+    <h1>바로가
+      <button id="info-btn" class="info-btn" type="button" title="데이터 정보" aria-label="데이터 정보"
+              aria-expanded="false" aria-controls="health-line">ⓘ</button>
+    </h1>
+    <p id="health-line" class="muted" hidden>서버 상태 확인 중…</p>
+  </header>
+
+  <div id="banners" aria-live="polite"></div>
+
+  <section id="search">
+    <h2>검색</h2>
+    <p class="hint">검색하거나 지도에 클릭해 출발·도착지를 선택하세요</p>
+    <div class="ac place-search">
+      <input id="place-q" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="place-list"
+             aria-label="주소·장소 검색" placeholder="주소·장소 검색" autocomplete="off" spellcheck="false" maxlength="100">
+      <ul id="place-list" class="ac-list" role="listbox" aria-label="검색 결과" hidden></ul>
+    </div>
+    <div class="od-fields">
+      <span class="pin od-origin">출발</span>
+      <div class="od-val">
+        <span id="origin-name" class="od-name"></span>
+        <button type="button" id="origin-clear" class="od-clear" title="출발 지우기" aria-label="출발 지우기">×</button>
+      </div>
+      <button type="button" id="btn-swap" class="od-swap" title="출발 ↔ 도착 바꾸기" aria-label="출발과 도착 바꾸기">
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor"
+             stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M8 2v12M4.5 5.5 8 2l3.5 3.5M4.5 10.5 8 14l3.5-3.5"/></svg>
+      </button>
+      <span class="pin od-dest">도착</span>
+      <div class="od-val">
+        <span id="dest-name" class="od-name"></span>
+        <button type="button" id="dest-clear" class="od-clear" title="도착 지우기" aria-label="도착 지우기">×</button>
+      </div>
+    </div>
+    <div class="buttons">
+      <button type="button" id="btn-search" class="primary" disabled>경로 검색</button>
+    </div>
+  </section>
+
+  <section id="results">
+    <h2>경로 검색 결과</h2>
+    <div class="subsec" id="transit">
+      <h3>대중교통</h3>
+      <div id="transit-body"></div>
+    </div>
+    <div class="subsec" id="taxi">
+      <h3>택시</h3>
+      <div id="car-body"></div>
+    </div>
+  </section>
+
+  <section id="diag">
+    <h2>매칭 진단</h2>
+    <p class="legend">
+      <span class="dot dot-matched"></span>매칭
+      <span class="dot dot-ambiguous"></span>모호
+      <span class="dot dot-unmatched"></span>미매칭(기준점)
+      · 회색 선 = 구간 끝점 ↔ DB 좌표
+    </p>
+    <div id="diag-body"></div>
+  </section>
+
+  <section id="probe">
+    <details>
+      <summary>프로브</summary>
+      <label class="probe-opt"><input type="checkbox" id="chk-probe"> 검색할 때 응답 구조 요약도 받기</label>
+      <div id="probe-body"></div>
+    </details>
+  </section>
+
+  <section id="quota">
+    <details>
+      <summary>쿼터</summary>
+      <div id="quota-body"><p class="muted">불러오는 중…</p></div>
+    </details>
+  </section>
+</aside>
+<main id="map" aria-label="지도"></main>
+</body>
+</html>

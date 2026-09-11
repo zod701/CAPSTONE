@@ -1,0 +1,69 @@
+{
+  "_note": "SYNTHETIC - hand-written from documented schema; not a Kakao response",
+  "status": "OK",
+  "properties": {"total": 2, "bus": 1, "subway": 1, "busAndSubway": 0},
+  "routes": [
+    {
+      "properties": {
+        "type": "SUBWAY",
+        "totalTime": 2350,
+        "totalDistance": 27600,
+        "transfers": 1,
+        "fare": {"value": 2800}
+      },
+      "steps": [
+        {
+          "properties": {
+            "guidance": "수인분당선 (수원 > 정자)",
+            "type": "SUBWAY",
+            "distance": 25000,
+            "time": 1900,
+            "stops": [{"name": "수원"}, {"name": "기흥"}, {"name": "정자"}],
+            "vehicles": [{"type": "급행", "name": "수인분당선"}]
+          },
+          "path": {"points": [[127.0000, 37.2660], [127.1150, 37.2750], [127.1085, 37.3670]]}
+        },
+        {
+          "properties": {
+            "guidance": "정자정자역 환승",
+            "type": "WALKING",
+            "distance": 90,
+            "time": 80
+          },
+          "path": {"points": [[127.1085, 37.3671], [127.1087, 37.3672], [127.1089, 37.3673], [127.1091, 37.3674], [127.1093, 37.3675]]}
+        },
+        {
+          "properties": {
+            "guidance": "신분당선 (정자 > 판교(판교테크노밸리))",
+            "type": "SUBWAY",
+            "distance": 2500,
+            "time": 240,
+            "stops": [{"name": "정자"}, {"name": "판교(판교테크노밸리)"}],
+            "vehicles": [{"type": "일반", "name": "신분당선"}]
+          },
+          "path": {"points": [[127.1093, 37.3675], [127.1112, 37.3947]]}
+        }
+      ]
+    },
+    {
+      "properties": {
+        "type": "BUS",
+        "totalTime": 780,
+        "totalDistance": 1700,
+        "transfers": 0,
+        "fare": {"value": 1500}
+      },
+      "steps": [
+        {
+          "guidance": "간선 470 (종로2가(중) > 광화문(중))",
+          "type": "BUS",
+          "distance": 1700,
+          "time": 780,
+          "stops": [{"name": "종로2가사거리"}, {"name": "종로1가"}, {"name": "광화문(중)"}],
+          "vehicles": [{"type": "간선", "name": "470"}],
+          "path": {"points": [[126.9880, 37.5700], [126.9820, 37.5702], [126.9768, 37.5707]]}
+        }
+      ]
+    }
+  ]
+}

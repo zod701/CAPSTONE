@@ -1,0 +1,10 @@
+﻿station_no,name,segment,seq,is_transfer,operator,lon,lat,method,checks
+N01,운정중앙,north,1,0,지티엑스에이운영,126.728198,37.716141,VWorld 주소 지오코딩(운정중앙로 60),위키백과 60 m / 버스 229000816 29 m
+N02,킨텍스,north,2,0,지티엑스에이운영,126.748250,37.665254,VWorld 장소 검색 출구 POI 4점 중심,"위키백과 33 m / VWorld 주소(장항동 1753, 필지 중심) 184 m"
+N03,대곡,north,3,1,지티엑스에이운영,126.811025,37.631629,VWorld 장소 검색(철도시설>일반철도역),DB ilsan-1953 0 m / DB gyeongui-1953 70 m
+N04,연신내,north,4,1,지티엑스에이운영,126.921162,37.618962,VWorld 장소 검색(철도시설>지하철역),DB seoul3-0321 41 m / DB seoul6-0614 85 m
+N05,서울역,north,5,1,지티엑스에이운영,126.970961,37.552203,VWorld 장소 검색 승강장 POI 7점 중심,DB arex-A01 139 m / DB seoul4-0426 188 m
+X108,수서,south,1,1,지티엑스에이운영,127.101118,37.487633,VWorld 장소 검색(철도시설>일반철도역),XLSX 지번주소→VWorld 102 m / XLSX 도로명주소→VWorld 317 m
+X109,성남,south,2,1,지티엑스에이운영,127.119445,37.394704,VWorld 장소 검색(철도시설>지하철역),XLSX 지번주소→VWorld 98 m / DB gyeonggang-1512 4 m
+X110,구성,south,3,1,지티엑스에이운영,127.105773,37.298879,VWorld 장소 검색(철도시설>지하철역),XLSX 좌표 35 m / XLSX 도로명주소→VWorld 1 m
+X111,동탄,south,4,0,㈜SR,127.096377,37.200087,VWorld 장소 검색('동탄역' 도로시설 POI — 역 POI 없음),XLSX 좌표 57 m / XLSX 도로명주소→VWorld(필지 중심) 495 m

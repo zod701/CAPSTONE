@@ -1,0 +1,5 @@
+﻿station_id,name,name_norm,name_key,aliases,line_raw,line_code,line_id,line_group,lat,lon,sido_cd,sido_nm,sgg_cd,sgg_nm,region_method,operator,is_transfer,data_date
+bundang-K222,정자,정자,정자,,분당선,L_BD,bundang,수인분당선,37.3672000,127.1084000,41,경기도,41130,성남시,contain,한국철도공사,1,2025-12-31
+shinbundang-D12,정자,정자,정자,,신분당선,L_SB,shinbundang,신분당선,37.3669000,127.1088000,41,경기도,41130,성남시,contain,신분당선(주),1,2025-12-31
+shinbundang-D13,판교(판교테크노밸리),판교(판교테크노밸리),판교,,신분당선,L_SB,shinbundang,신분당선,37.3948000,127.1112000,41,경기도,41130,성남시,contain,신분당선(주),1,2025-12-31
+bundang-K245,수원,수원,수원,,분당선,L_BD,bundang,수인분당선,37.2660000,126.9998000,41,경기도,41110,수원시,contain,한국철도공사,1,2025-12-31

@@ -1,0 +1,30 @@
+{
+  "_note": "SYNTHETIC - hand-written from documented schema; not a Kakao response",
+  "meta": {"total_count": 3, "pageable_count": 3, "is_end": true},
+  "documents": [
+    {"address_name": "경기 합성시 합성동", "address_type": "REGION", "x": "127.105", "y": "37.395",
+     "address": {"address_name": "경기 합성시 합성동", "region_1depth_name": "경기", "region_2depth_name": "합성시",
+                 "region_3depth_name": "합성동", "region_3depth_h_name": "합성1동", "h_code": "4100000001",
+                 "b_code": "4100000002", "mountain_yn": "N", "main_address_no": "", "sub_address_no": "",
+                 "x": "127.105", "y": "37.395"},
+     "road_address": null},
+    {"address_name": "경기 합성시 합성로 12", "address_type": "ROAD_ADDR", "x": "127.1112", "y": "37.3947",
+     "address": {"address_name": "경기 합성시 합성동 1", "region_1depth_name": "경기", "region_2depth_name": "합성시",
+                 "region_3depth_name": "합성동", "region_3depth_h_name": "합성1동", "h_code": "4100000001",
+                 "b_code": "4100000002", "mountain_yn": "N", "main_address_no": "1", "sub_address_no": "",
+                 "x": "127.1112", "y": "37.3947"},
+     "road_address": {"address_name": "경기 합성시 합성로 12", "region_1depth_name": "경기",
+                      "region_2depth_name": "합성시", "region_3depth_name": "합성동", "road_name": "합성로",
+                      "underground_yn": "N", "main_building_no": "12", "sub_building_no": "",
+                      "building_name": "합성타워", "zone_no": "00000", "x": "127.1112", "y": "37.3947"}},
+    {"address_name": "경기 합성시 합성동 3-1", "address_type": "REGION_ADDR", "x": "127.12", "y": "37.39",
+     "address": {"address_name": "경기 합성시 합성동 3-1", "region_1depth_name": "경기", "region_2depth_name": "합성시",
+                 "region_3depth_name": "합성동", "region_3depth_h_name": "합성1동", "h_code": "4100000001",
+                 "b_code": "4100000002", "mountain_yn": "N", "main_address_no": "3", "sub_address_no": "1",
+                 "x": "127.12", "y": "37.39"},
+     "road_address": {"address_name": "경기 합성시 합성로 30", "region_1depth_name": "경기",
+                      "region_2depth_name": "합성시", "region_3depth_name": "합성동", "road_name": "합성로",
+                      "underground_yn": "N", "main_building_no": "30", "sub_building_no": "",
+                      "building_name": "", "zone_no": "00000", "x": "127.12", "y": "37.39"}}
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "_note": "SYNTHETIC - hand-written from documented schema; not a Kakao response",
+  "trans_id": "synthetic-0001",
+  "routes": [
+    {
+      "result_code": 0,
+      "result_msg": "길찾기 성공",
+      "summary": {
+        "origin": {"name": "", "x": 127.0, "y": 37.26},
+        "destination": {"name": "", "x": 127.003, "y": 37.263},
+        "waypoints": [],
+        "priority": "RECOMMEND",
+        "fare": {"taxi": 15000, "toll": 0},
+        "distance": 12000,
+        "duration": 1500
+      },
+      "sections": [
+        {
+          "distance": 8000,
+          "duration": 1000,
+          "roads": [
+            {"name": "합성로1", "distance": 5000, "duration": 600, "traffic_speed": 30.0, "traffic_state": 0,
+             "vertexes": [127.0, 37.26, 127.001, 37.261, 127.001, 37.261]},
+            {"name": "합성로2", "distance": 3000, "duration": 400, "traffic_speed": 27.0, "traffic_state": 0,
+             "vertexes": [127.001, 37.261, 127.002, 37.262]}
+          ]
+        },
+        {
+          "distance": 4000,
+          "duration": 500,
+          "roads": [
+            {"name": "합성로3", "distance": 4000, "duration": 500, "traffic_speed": 28.8, "traffic_state": 0,
+             "vertexes": [127.002, 37.262, 127.003, 37.263]}
+          ]
+        }
+      ]
+    }
+  ]
+}

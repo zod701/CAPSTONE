@@ -1,0 +1,24 @@
+{
+  "_note": "SYNTHETIC - hand-written from documented schema; not a Kakao response",
+  "meta": {"total_count": 5, "pageable_count": 5, "is_end": true,
+           "same_name": {"region": [], "keyword": "합성", "selected_region": ""}},
+  "documents": [
+    {"id": "901", "place_name": "합성역 합성선", "category_name": "교통,수송 > 지하철,전철 > 합성선",
+     "category_group_code": "SW8", "category_group_name": "지하철역", "phone": "",
+     "address_name": "경기 합성시 합성동 1", "road_address_name": "경기 합성시 합성로 12",
+     "x": "127.1112", "y": "37.3947", "place_url": "http://place.example/901", "distance": ""},
+    {"id": "902", "place_name": "합성테크노밸리", "category_name": "부동산 > 산업단지",
+     "category_group_code": "", "category_group_name": "", "phone": "",
+     "address_name": "경기 합성시 합성동 2", "road_address_name": "",
+     "x": "127.1", "y": "37.4", "place_url": "http://place.example/902", "distance": ""},
+    {"id": "903", "place_name": "좌표없는곳", "category_name": "", "category_group_code": "", "category_group_name": "",
+     "phone": "", "address_name": "경기 합성시 합성동 3", "road_address_name": "",
+     "x": "", "y": "", "place_url": "", "distance": ""},
+    {"id": "904", "place_name": "먼바다", "category_name": "", "category_group_code": "", "category_group_name": "",
+     "phone": "", "address_name": "", "road_address_name": "",
+     "x": "140.0", "y": "30.0", "place_url": "", "distance": ""},
+    {"id": "905", "place_name": "", "category_name": "", "category_group_code": "", "category_group_name": "",
+     "phone": "", "address_name": "경기 합성시 합성동 5", "road_address_name": "",
+     "x": "127.2", "y": "37.2", "place_url": "", "distance": ""}
+  ]
+}
