@@ -9,7 +9,7 @@
 |---|---|---|
 | `csv/` | 원본 — 받은 그대로 두고 **수정하지 않는다**. 아래 출처표에서 받아 넣는다 | 무시 |
 | `external/` | 스크립트가 내려받은 원본 | 무시 |
-| `ref/` | 손으로 작성하는 참조표 (노선 매핑, 역 단위 노선군 보정, 노선군 색·카카오 이름, 버스 쌍 수동 판정, 최신 정류소 파일 좌표가 틀린 버스 정류소의 좌표 `bus_coord_overrides.csv`, 원천에 없는 GTX-A 역 `gtxa_stations.csv`, 다른 역 좌표가 들어간 역의 좌표 `subway_coord_overrides.csv`, 서지 않는 노선으로 잘못 들어간 역 행 `subway_station_drops.csv`, 역 순서표용 노선정보 행 선택 `subway_seq_lines.csv`·보정 `subway_seq_fixes.csv`) | 커밋 |
+| `ref/` | 손으로 작성하는 참조표 (노선 매핑, 역 단위 노선군 보정, 노선군 색·카카오 이름, 버스 쌍 수동 판정, 최신 정류소 파일 좌표가 틀린 버스 정류소의 좌표 `bus_coord_overrides.csv`, 원천에 없는 GTX-A 역 `gtxa_stations.csv`, 다른 역 좌표가 들어간 역의 좌표 `subway_coord_overrides.csv`, 서지 않는 노선으로 잘못 들어간 역 행 `subway_station_drops.csv`, 역 순서표용 노선정보 행 선택 `subway_seq_lines.csv`·보정 `subway_seq_fixes.csv`, 개명으로 이름이 다른 GTFS 역 `gtfs_station_map.csv`) | 커밋 |
 | `scripts/` | 파이프라인 스크립트 + 공용 모듈 (`textnorm`, `geoutil`, `regions`) | 커밋 |
 | `processed/` | 산출물 — 아래 명령으로 언제든 다시 만든다 | 무시 |
 | `reports/` | 단계별 건수 보고서·검토 CSV | 커밋 |
@@ -33,6 +33,8 @@ $env:PYTHONUTF8="1"
 .\.venv\Scripts\python.exe data\scripts\clean_subway_stations.py  # → processed/subway_stations.csv, reports/subway_stations.md
 .\.venv\Scripts\python.exe data\scripts\build_subway_seq.py       # → processed/subway_line_seq.csv, reports/subway_line_seq.md
 .\.venv\Scripts\python.exe data\scripts\build_bus_route_seq.py    # → processed/bus_route_stops.csv, reports/bus_route_stops.md
+.\.venv\Scripts\python.exe data\scripts\build_headway.py          # → processed/headway_bus.csv, headway_rail.csv, reports/headway.md
+.\.venv\Scripts\python.exe data\scripts\build_subway_live_map.py  # → processed/subway_live_stations.csv, reports/subway_live_map.md
 .\.venv\Scripts\python.exe -m pytest data/tests
 ```
 
@@ -52,6 +54,26 @@ $env:PYTHONUTF8="1"
 맞는 카카오 유형이 없으면 원천의 짧은 이름(좌석·따복·수요응답·관광·심야)이다. `route_type_src` 는 원천 유형 이름 그대로다
 (경기: GBIS 노선유형코드의 이름, 서울: 노선정보조회 routeType 의 이름). 서울 노선 목록에 없는 노선(`청와대A01`)은 빈칸이다.
 경기 파일은 날마다 새 버전이 나온다 — `fetch_gbis.py` 를 다시 돌리면 새 버전 폴더에 받고, 정류소 정제와 순서표는 가장 최근 버전을 읽는다.
+
+**배차간격**(`headway_bus.csv` · `headway_rail.csv`): 대기시간 모델의 입력이다.
+버스는 원천의 배차값을 그대로 쓴다 — 경기 GBIS 노선 파일이 요일 유형 4개(평일·토요일·일요일·공휴일)의 **최소·최대 배차**와
+방향별 첫·막차를, 서울 노선 목록이 `term`(대표 배차 하나, 요일 구분 없음)과 첫·막차를 준다. 경기 원천의 `peekAlloc`·`npeekAlloc`
+은 이름과 달리 첨두/비첨두가 아니라 최소·최대다. 0 과 빈값은 정보 없음이다.
+도시철도는 KTDB 대중교통 GTFS(`csv/대중교통GTFS(...)/`, 2025년 3월 **평일 1일**)의 실제 시각표에서 역·방향·시간대별로
+정차 횟수를 세어 배차(= 60분 / 횟수)를 만든다 — 급행·지선·순환은 GTFS 가 노선을 따로 두므로 한 역에 서는 모든 패턴이 함께 세어진다.
+GTFS 의 **버스** 시각표는 첫차~막차를 대표 배차로 균등 분배한 합성값이라 쓰지 않는다. GTFS 노선명 ↔ 노선군은
+`ref/line_groups.csv` 의 `gtfs_names`, 개명으로 이름이 다른 역은 `ref/gtfs_station_map.csv` 로 잇는다.
+
+**실시간 역명**(`subway_live_stations.csv`): 실시간 지하철 도착 조회의 질의 키다 — 그 API 는 역명 **정확 일치**만 받으므로
+우리 표시 이름으로 물으면 조용히 0 건이 온다(`양재(서초구청)`→`양재`, `서울역`→`서울`, `○○역` 접미 전부 — 표기가 다른 행이
+325개다). 그래서 역마다 질의에 쓸 실시간 원문 이름(`live_name`)과 응답을 거를 키(`live_statn_id`)를 미리 이어 둔다.
+매칭은 실시간 역정보 파일의 (노선군, 이름 키) → 별칭 순이고, 파일의 `호선이름` 이 우리 `line_group` 과 같은 문자열이라
+노선군 참조표가 따로 필요 없다(`SUBWAY_ID` 도 파일에서 끌어온다). 개명·방향 표기로 이름이 아예 다른 역은
+`ref/subway_live_names.csv` 로 잇는다 — 그 표를 자동 매칭보다 **먼저** 적용하고(원천에 살아 있는 옛 이름 `신길온천` 이
+엉뚱한 행에 붙지 않게), 대상 역이 역 DB 에 없거나 이름이 다르거나 이미 자동으로 맞으면 멈춘다.
+685역 중 642역이 조회 가능하다. 진접선 3역은 열차 목적지(`진접행`)로만 나오고 역별 실시간이 없으며,
+용인에버라인·의정부경전철·김포골드라인 40역은 노선군 자체가 실시간에 없다 — 재시도 대상이 아니라 '실시간 미제공' 이다.
+조회는 `live_name` 단위로 묶는다(642행의 유일한 이름이 512개다 — 환승역은 한 응답에 여러 노선 행이 섞여 온다).
 
 **역 순서표**(`subway_line_seq.csv`): 한 행 = 순서 안의 역 하나. 순서(`chain_id`) 하나가 운영 노선 또는 지선 하나이고
 (`seoul2:성수지선` 처럼 지선은 분기역부터 시작), `loop=1` 이면 끝 역 다음이 첫 역이다. 같은 물리 역은 `phys_id` 가 같아
@@ -76,6 +98,8 @@ $env:PYTHONUTF8="1"
 | 서울 버스 노선별 정류소 | 서울 열린데이터광장 [OA-1095](https://data.seoul.go.kr/dataList/OA-1095/F/1/datasetView.do) 서울시 버스노선별 정류소 정보 | `csv/서울시버스노선별정류소정보(20260902).xlsx` | 공공누리 1유형 — 출처 표시 |
 | 서울 버스 노선 목록(유형) | 서울특별시_노선정보조회 서비스 — 공공데이터포털(data.go.kr) [15000193](https://www.data.go.kr/data/15000193/openapi.do) (`fetch_seoul_routes.py`, 활용신청 필요) | `external/seoul_bus/<날짜>/busRouteList.csv` | 데이터 페이지의 이용허락범위 |
 | 경기 버스 노선–정류소 · 노선(유형) | 경기도 버스정보 기반정보 — 공공데이터포털(data.go.kr) 15080658 (`fetch_gbis.py`) | `external/gbis/<버전>/routestation<버전>V2.txt` · `route<버전>V2.txt` | 이용허락범위 제한 없음 |
+| 대중교통 시각표(GTFS) | KTDB 국가교통DB 대중교통 GTFS 기반정보 (2025년 3월 평일 1일, 자료신청) | `csv/대중교통GTFS(2025년 기준)/202503_GTFS_DataSet/` | 자료 제공 조건 |
+| 서울 지하철 실시간 도착 역정보 | 서울 열린데이터광장 [OA-12764](https://data.seoul.go.kr/dataList/OA-12764/F/1/datasetView.do) 지하철 실시간 도착정보의 역 목록 | `csv/실시간도착_역정보(20260902).xlsx` | 공공누리 1유형 — 출처 표시 |
 | 행정경계 | [vuski/admdongkor](https://github.com/vuski/admdongkor) `ver20260701` (원천 통계청 SGIS) | `external/admdongkor/HangJeongDong_ver20260701.geojson` | CC BY 4.0 — **출처 표기 의무** |
 
 행정경계를 보여 주는 지도·보고서에는 다음을 표기한다.

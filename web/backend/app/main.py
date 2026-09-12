@@ -13,8 +13,12 @@ from fastapi.staticfiles import StaticFiles
 from . import api, tiles
 from .config import Settings, load_settings
 from .errors import install_handlers
+from .headwaydb import HeadwayDB
 from .kakao import KakaoClient
+from .linesdb import LinesDB
+from .livestationsdb import LiveStationsDB
 from .quota import QuotaGuard
+from .realtime import RealtimeClient
 from .routesdb import RoutesDB
 from .stopsdb import StopsDB
 
@@ -42,7 +46,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         st.settings = settings
         st.quota = QuotaGuard(settings.quota_path,
                               {"transit": settings.transit_daily_limit, "car": settings.car_daily_limit,
-                               "keyword": settings.keyword_daily_limit, "address": settings.address_daily_limit})
+                               "keyword": settings.keyword_daily_limit, "address": settings.address_daily_limit,
+                               "gyeonggi_bus": settings.gyeonggi_bus_daily_limit,
+                               "seoul_bus": settings.seoul_bus_daily_limit,
+                               "seoul_subway": settings.seoul_subway_daily_limit})
         try:
             st.stops = StopsDB.load(settings.processed_dir, settings.ref_dir)
         except FileNotFoundError:
@@ -51,9 +58,25 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             st.routes = RoutesDB.load(settings.processed_dir)
         except FileNotFoundError:
             st.routes = None  # 정류장 경유 노선 API 는 data_not_built
+        try:
+            st.lines = LinesDB.load(settings.processed_dir)
+        except FileNotFoundError:
+            st.lines = None   # 도시철도 구간은 이름·기하로만 찾는다
+        try:
+            st.headway = HeadwayDB.load(settings.processed_dir)
+        except FileNotFoundError:
+            st.headway = None   # 대기시간을 더한 소요 시간만 빠진다
+        try:
+            st.live_stations = LiveStationsDB.load(settings.processed_dir)
+        except FileNotFoundError:
+            st.live_stations = None   # 역 실시간 도착 API 만 data_not_built
         async with httpx.AsyncClient(transport=transport, timeout=settings.http_timeout_s) as http:
             st.http = http
             st.kakao = KakaoClient(http, settings.kakao_rest_key, st.quota, settings.http_timeout_s)
+            st.realtime = RealtimeClient(http, st.quota, data_go_kr_key=settings.data_go_kr_key,
+                                         subway_key=settings.seoul_subway_live_key,
+                                         timeout_s=settings.arrivals_timeout_s,
+                                         ttl_s=settings.arrivals_cache_ttl_s)
             yield
 
     app = FastAPI(title="바로가", lifespan=lifespan)

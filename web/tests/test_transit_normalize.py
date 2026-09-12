@@ -48,7 +48,7 @@ def test_normalize_transit_routes(raw):
     assert [s["idx"] for s in r0["steps"]] == [0, 1, 2]
 
     s0, walk, s2 = r0["steps"]
-    assert s0["stops"] == ["수원", "기흥", "정자"]
+    assert s0["stops"] == ["수원", "신길온천", "정자"]
     assert s0["vehicles"] == [{"type": "급행", "name": "수인분당선"}]
     assert (s0["board_name"], s0["alight_name"]) == ("수원", "정자")
     assert (s0["guidance_from"], s0["guidance_to"]) == ("수원", "정자")

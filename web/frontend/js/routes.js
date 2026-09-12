@@ -52,6 +52,23 @@ function routeLabel(route) {
   return parts.join("+") || route.type || "경로";
 }
 
+// 카카오 소요 시간에는 차를 기다리는 시간이 없다(실측) — 배차로 추정한 대기를 더한 값을 옆에 작게.
+// 한 구간이라도 배차를 모르면 서버가 합을 주지 않는다(total_with_wait_s = null) → 그 경로는 지금까지처럼 시간만 보인다
+function waitText(r) {
+  if (r.total_with_wait_s == null) return "";
+  const day = cards?.transit?.wait_basis?.day_type;
+  const rides = (r.steps || []).filter((s) => s.headway_m != null);
+  const per = rides.map((s) => `${s.type === "SUBWAY" ? "지하철" : "버스"} ${Math.round(s.headway_m)}분`).join(" · ");
+  // 도시철도 배차는 평일 시각표(GTFS)에서 센 값이라 주말에도 평일 값이다 — 무엇을 근거로 삼았는지 밝힌다
+  const basis = [day && rides.some((s) => s.type !== "SUBWAY") ? `버스 ${day} 배차` : "",
+    rides.some((s) => s.type === "SUBWAY") ? "지하철 평일 시각표" : ""].filter(Boolean).join(" · ");
+  const why = `기다리는 시간 ${fmtMin(r.wait_s)}을 더한 값 — 구간 배차의 절반으로 추정`
+    + (per ? `
+구간 배차: ${per}` : "") + (basis ? `
+기준: ${basis}` : "");
+  return `<span class="rc-wait" title="${esc(why)}">대기 포함 ${fmtMin(r.total_with_wait_s)}</span>`;
+}
+
 function fareText(f) {
   if (f?.value != null) return fmtWon(f.value);
   if (f?.min != null || f?.max != null) {
@@ -222,7 +239,8 @@ function routeCardHTML(r, i) {
   return `
     <div class="route-card" data-i="${i}">
       <button type="button" class="rc-head" aria-expanded="false">
-        <span class="rc-top"><b class="rc-type">${esc(routeLabel(r))}</b><b class="rc-time">${fmtMin(r.total_time_s)}</b>${matchBadge(r.diag_summary)}</span>
+        <span class="rc-top"><b class="rc-type">${esc(routeLabel(r))}</b>
+          <span class="rc-times"><b class="rc-time">${fmtMin(r.total_time_s)}</b>${waitText(r)}</span>${matchBadge(r.diag_summary)}</span>
         <span class="rc-meta">${esc(fareText(r.fare))} · 환승 ${esc(r.transfers ?? "–")}회 · ${fmtKm(r.total_distance_m)} · 도보 약 ${fmtDist(cards.walk[i])}</span>
         <span class="rc-chips">${chips(r)}</span>
       </button>
@@ -257,10 +275,14 @@ function expandCard(el, transit, idx) {
 export function routeTimelineHTML(route) {
   const steps = route.steps || [];
   const items = [];
-  const node = (name, end = false) => {
+  // wait = 그 지점에서 차를 기다리는 시간(배차의 절반 추정) — 타고 오르는 지점에만 붙는다
+  const node = (name, end = false, wait = null) => {
     const prev = items.at(-1);
-    if (!end && prev?.kind === "node" && prev.name === name) return; // 도보 없이 이어 탈 때 같은 역은 한 번만
-    items.push({ kind: "node", name, end });
+    if (!end && prev?.kind === "node" && prev.name === name) { // 도보 없이 이어 탈 때 같은 역은 한 번만
+      if (wait != null) prev.wait = wait;
+      return;
+    }
+    items.push({ kind: "node", name, end, wait });
   };
   node("출발지", true);
   if (steps.length && steps[0].type !== "WALKING") items.push({ kind: "missing" }); // 카카오가 주지 않는 첫 도보
@@ -270,7 +292,7 @@ export function routeTimelineHTML(route) {
       continue;
     }
     const stops = s.stops || [];
-    node(stops[0] ?? s.board_name ?? "?");
+    node(stops[0] ?? s.board_name ?? "?", false, s.wait_s ?? null);
     items.push({ kind: "ride", s });
     node(stops.length >= 2 ? stops.at(-1) : s.alight_name ?? "?");
   }
@@ -283,8 +305,10 @@ const rail = (line = "") => `<span class="tl-rail">${line}</span>`;
 
 function timelineItem(it) {
   if (it.kind === "node") {
+    const wait = it.wait == null ? ""
+      : `<span class="tl-wait" title="배차의 절반으로 추정한 기다리는 시간">대기 약 ${fmtMin(it.wait)}</span>`;
     return `<li class="tl-node${it.end ? " tl-end" : ""}">${rail('<span class="tl-dot"></span>')}`
-      + `<span class="tl-name">${esc(it.name)}</span></li>`;
+      + `<span class="tl-name">${esc(it.name)}${wait}</span></li>`;   // 레일 오른쪽 칸은 하나다 — 이름 안에 붙인다
   }
   if (it.kind === "missing") {
     return `<li class="tl-seg tl-walk tl-missing">${rail('<span class="tl-line"></span>')}`

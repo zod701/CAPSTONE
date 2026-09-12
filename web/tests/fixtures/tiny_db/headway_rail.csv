@@ -1,0 +1,9 @@
+station_id,name,line_group,direction,hour,n_trips,headway_m
+bundang-K222,정자,수인분당선,상행,8,10,6.0
+bundang-K222,정자,수인분당선,하행,8,12,5.0
+bundang-K222,정자,수인분당선,상행,9,6,10.0
+bundang-K222,정자,수인분당선,하행,9,6,10.0
+shinbundang-D12,정자,신분당선,상행,8,15,4.0
+shinbundang-D12,정자,신분당선,하행,8,15,4.0
+bundang-K245,수원,수인분당선,상행,8,6,10.0
+bundang-K245,수원,수인분당선,하행,8,6,10.0

@@ -21,10 +21,9 @@
 <aside id="sidebar">
   <header class="brand">
     <h1>바로가
-      <button id="info-btn" class="info-btn" type="button" title="데이터 정보" aria-label="데이터 정보"
-              aria-expanded="false" aria-controls="health-line">ⓘ</button>
+      <button id="info-btn" class="info-btn" type="button" title="데이터·API 정보" aria-label="데이터·API 정보"
+              aria-haspopup="dialog" aria-controls="info-dialog">ⓘ</button>
     </h1>
-    <p id="health-line" class="muted" hidden>서버 상태 확인 중…</p>
   </header>
 
   <div id="banners" aria-live="polite"></div>
@@ -72,14 +71,16 @@
   </section>
 
   <section id="diag">
-    <h2>매칭 진단</h2>
-    <p class="legend">
-      <span class="dot dot-matched"></span>매칭
-      <span class="dot dot-ambiguous"></span>모호
-      <span class="dot dot-unmatched"></span>미매칭(기준점)
-      · 회색 선 = 구간 끝점 ↔ DB 좌표
-    </p>
-    <div id="diag-body"></div>
+    <details>
+      <summary>매칭 진단</summary>
+      <p class="legend">
+        <span class="dot dot-matched"></span>매칭
+        <span class="dot dot-ambiguous"></span>모호
+        <span class="dot dot-unmatched"></span>미매칭(기준점)
+        · 회색 선 = 구간 끝점 ↔ DB 좌표
+      </p>
+      <div id="diag-body"></div>
+    </details>
   </section>
 
   <section id="probe">
@@ -98,5 +99,54 @@
   </section>
 </aside>
 <main id="map" aria-label="지도"></main>
+
+<dialog id="info-dialog" class="info-dialog" aria-labelledby="info-title">
+  <form method="dialog" class="info-head">
+    <h2 id="info-title">데이터·API 정보</h2>
+    <button class="info-close" type="submit" title="닫기" aria-label="닫기">×</button>
+  </form>
+  <div class="info-body">
+    <p id="health-line" class="muted">서버 상태 확인 중…</p>
+
+    <h3>데이터 출처</h3>
+    <table class="info">
+      <thead><tr><th>자료</th><th>출처</th><th>이용 조건</th></tr></thead>
+      <tbody>
+        <tr><td>버스 정류장</td>
+            <td>국토교통부 전국 버스정류장 위치정보(공공데이터포털) · 서울 열린데이터광장 OA-15067 · 경기도 버스정보(GBIS)</td>
+            <td>데이터 페이지 이용허락범위 · 공공누리 1유형</td></tr>
+        <tr><td>버스 노선·정류소 순서</td>
+            <td>서울 열린데이터광장 OA-1095 · 서울시 노선정보조회 · 경기도 버스정보(GBIS)</td>
+            <td>공공누리 1유형 · 데이터 페이지 이용허락범위</td></tr>
+        <tr><td>도시철도 역·노선</td>
+            <td>전국도시철도역사정보·노선정보 표준데이터(공공데이터포털)</td>
+            <td>데이터 페이지 이용허락범위</td></tr>
+        <tr><td>실시간 도착 역 이름</td>
+            <td>서울 열린데이터광장 OA-12764 (지하철 실시간 도착정보의 역 목록)</td>
+            <td>공공누리 1유형</td></tr>
+        <tr><td>시군구 경계</td>
+            <td>통계청 SGIS · 가공 vuski/admdongkor ver20260701</td>
+            <td>CC BY 4.0 — 출처 표기</td></tr>
+      </tbody>
+    </table>
+
+    <h3>API 정보</h3>
+    <table class="info">
+      <thead><tr><th>사용</th><th>제공</th><th>주소</th></tr></thead>
+      <tbody>
+        <tr><td>대중교통 길찾기</td><td>카카오맵</td><td>dapi.kakao.com</td></tr>
+        <tr><td>자동차 길찾기·택시요금</td><td>카카오모빌리티</td><td>apis-navi.kakaomobility.com</td></tr>
+        <tr><td>주소·장소 검색</td><td>카카오 로컬</td><td>dapi.kakao.com</td></tr>
+        <tr><td>배경지도 타일</td><td>VWorld(국토교통부) · OpenStreetMap</td><td>api.vworld.kr</td></tr>
+        <tr><td>버스 도착 정보(경기)</td><td>경기도 버스도착정보(GBIS, 공공데이터포털)</td><td>apis.data.go.kr</td></tr>
+        <tr><td>버스 도착 정보(서울)</td><td>서울 TOPIS 버스도착정보</td><td>ws.bus.go.kr</td></tr>
+        <tr><td>도시철도 도착 정보</td><td>서울 열린데이터광장 실시간 지하철</td><td>swopenapi.seoul.go.kr</td></tr>
+      </tbody>
+    </table>
+    <p class="info-note">© Kakao, Kakao Mobility — 카카오 약관에 따라 저장·캐시하지 않고
+      화면에 보여 주는 동안만 사용합니다.</p>
+  </div>
+</dialog>
+
 </body>
 </html>

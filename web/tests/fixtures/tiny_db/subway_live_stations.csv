@@ -1,0 +1,6 @@
+﻿station_id,name,line_group,live_subway_id,live_statn_id,live_name,match,note,data_date
+bundang-K222,정자,수인분당선,1075,1075000825,정자,exact,,2026-09-02
+shinbundang-D12,정자,신분당선,1077,1077000689,정자,exact,,2026-09-02
+shinbundang-D13,판교(판교테크노밸리),신분당선,1077,1077000690,판교,alias,괄호 안을 뗀 이름으로 맞췄다,2026-09-02
+bundang-K240,능길,수인분당선,1075,1075000844,신길온천,override,실시간 API 가 옛 이름을 쓴다,2026-09-02
+bundang-K245,수원,수인분당선,,,,no_live_station,실시간 목록에 없는 역 (합성),2026-09-02

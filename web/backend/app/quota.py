@@ -12,7 +12,9 @@ from pathlib import Path
 from .config import KST
 from .errors import ApiError
 
-LABELS = {"transit": "대중교통 경로 조회", "car": "자동차 길찾기", "keyword": "장소 검색", "address": "주소 검색"}
+LABELS = {"transit": "대중교통 경로 조회", "car": "자동차 길찾기", "keyword": "장소 검색", "address": "주소 검색",
+          "gyeonggi_bus": "경기 버스 도착정보", "seoul_bus": "서울 버스 도착정보",
+          "seoul_subway": "서울 도시철도 실시간 도착"}
 
 
 def exceeded_error(kind, limit=None, upstream_status=None):

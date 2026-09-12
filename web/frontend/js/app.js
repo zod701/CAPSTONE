@@ -419,11 +419,9 @@ async function init() {
   clearResults();
   update();
   showThemeButton(document.documentElement.dataset.theme === "dark");
-  $("info-btn").addEventListener("click", (e) => {
-    const pop = $("health-line");
-    pop.hidden = !pop.hidden;
-    e.currentTarget.setAttribute("aria-expanded", String(!pop.hidden));
-  });
+  const info = $("info-dialog"); // 데이터 출처·API 표 (제목 옆 ⓘ). 닫기는 × · Esc · 바깥 클릭
+  $("info-btn").addEventListener("click", () => info.showModal());
+  info.addEventListener("click", (e) => { if (e.target === info) info.close(); });
   const [h, q] = await Promise.allSettled([getJSON("/api/health"), getJSON("/api/quota")]);
   if (h.status === "fulfilled") {
     renderHealth(h.value);

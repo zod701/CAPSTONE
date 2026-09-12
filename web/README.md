@@ -21,8 +21,14 @@ Leaflet 1.9.4 는 `web/frontend/vendor/leaflet-1.9.4/` 에 들어 있다. 빌드
 | `KAKAO_CAR_DAILY_LIMIT` | 선택, 기본 10000 | 자동차 일일 호출 한도 |
 | `KAKAO_KEYWORD_DAILY_LIMIT` | 선택, 기본 100000 | 키워드로 장소 검색 일일 호출 한도 |
 | `KAKAO_ADDRESS_DAILY_LIMIT` | 선택, 기본 100000 | 주소 검색 일일 호출 한도 |
+| `DATA_GO_KR_API_KEY` | 버스 실시간 도착 | 경기 GBIS · 서울 TOPIS 버스 도착정보 (두 원천이 같은 키를 쓴다) |
+| `SEOUL_SUBWAY_LIVE_API` | 도시철도 실시간 도착 | 서울 열린데이터광장 '실시간 지하철' (서울 밖도 된다. 용인에버라인·의정부경전철·김포골드라인·인천 1·2호선은 제공하지 않는다) |
+| `GYEONGGI_BUS_DAILY_LIMIT` | 선택, 기본 1000 | 경기 버스 도착정보 일일 호출 한도 |
+| `SEOUL_BUS_DAILY_LIMIT` | 선택, 기본 1000 | 서울 버스 도착정보 일일 호출 한도 |
+| `SEOUL_SUBWAY_DAILY_LIMIT` | 선택, 기본 1000 | 도시철도 실시간 도착 일일 호출 한도 |
 
 기본 한도는 카카오 무료 쿼터와 같다 — 넘기 전에 서버가 막으므로 초과 과금이 생기지 않는다.
+도착정보 세 원천의 기본 1000건/일은 공공데이터 개발계정 한도와 같다 (data.go.kr 은 활용신청이 승인되어야 응답한다).
 카카오맵 [사용 설정] 하나가 대중교통과 로컬 검색을 함께 연다.
 
 - `KEY ="value"` 형식도 읽는다. 이미 설정된 환경변수가 `.env` 보다 우선한다. `.env` 는 커밋하지 않는다(gitignore).
@@ -33,7 +39,18 @@ Leaflet 1.9.4 는 `web/frontend/vendor/leaflet-1.9.4/` 에 들어 있다. 빌드
 정류소·역·행정경계(`data/processed/`)가 있어야 지도에 정류소가 뜬다. 파이프라인 명령은 [`data/README.md`](../data/README.md) 를 따른다.
 산출물이 없어도 서버는 뜬다. 이때 `/api/health` 는 `ready: false` 를 주고, 정류소·경계 API 는 `data_not_built`(503) 를 준다.
 버스 노선 순서표(`data/processed/bus_route_stops.csv`)가 있으면 버스 정류장을 눌렀을 때 경유 노선이 보이고, 노선을 누르면 그 노선의 정류장이 지도에 강조된다(없어도 나머지는 동작).
-정류소 CSV·노선 순서표나 `data/ref/line_groups.csv` 를 고친 뒤에는 서버를 다시 시작한다 (시작할 때 한 번 읽는다).
+경로 매칭도 이 표를 쓴다 — 버스 구간의 진행 방향(상·하행)을 운행 순서로 가리고, 경유 정류소는 순서표에서 그대로 읽는다(없으면 이름·거리로 찾는다).
+승·하차 이름이 어긋나도 이 표로 구제한다: 토막 순서만 뒤바뀐 복합 이름(`A.B` ↔ `B.A`)은 토막 집합으로 맞추고(진단 `match_level: parts`),
+쓸 이름 후보가 **하나도 없으면**(글자가 맞은 `key`·`alias`·`parts` 후보가 없고, 앞 4글자만 같은 `prefix` 후보도 그 노선에 서지 않으면) 이름을 버리고 그 노선이 서는 정류장 중 **운행 순번 간격이 구간 정류소 개수와 정확히 맞는** 곳을 고른다(`match_level: route`, `line_filter: route`).
+간격으로 확인되지 않으면 고르지 않는다(`line_filter: route_gap` → 미매칭). 글자가 맞는 행이 있는데 그 행이 순서표에 없으면 **순서표가 낡은 것**이므로 구제하지 않고 그 역할만 노선으로 가리지 않는다(`line_filter: mismatch`) — 글자가 맞은 이름 근거를 노선 순서와 바꾸지 않는다. 간격 제한은 역할마다 따로 보므로 한쪽 끝이 약해도 다른 쪽 끝의 진행 방향 판정은 그대로다.
+이름 글자가 다른 채 고른 항목은 `name_mismatch: true` 와 `rescue`(노선 id·간격·경쟁 후보 수 `n_rivals`)·`nearest_any` 를 함께 주고, 경쟁 후보가 남으면 거리 차가 크더라도 `ambiguous` 다 — 정류소 DB 가 낡았다(신설·개명)는 신호를 구제가 삼키지 않게.
+순번이 한 칸 붙은 경쟁 후보는 모호 근거로만 쓰고 `chosen` 으로 고르지 않는다(지도 칩·실시간 도착이 `chosen` 을 쓴다) — 그래서 `second_gap_m` 은 경쟁 후보가 더 가까우면 음수다.
+승·하차를 양쪽 다 노선으로 가렸는데 **한 노선으로 이어지지 않으면**(같은 이름의 노선이 여럿일 때) 둘 다 `ambiguous`·`line_filter: unlinked` 로 내린다 — 둘 중 하나는 반드시 오답이다.
+진단 화면은 `match_level` 5개(`key`·`alias`·`parts`·`prefix`·`route`)를 모두 그려야 하고, `nearest_any`·`nearest_same_name_m` 는 `chosen` 이 있는 `parts`·`route` 항목에도 채워진다 — 그 두 값이 구제가 삼킨 '낡은 DB' 신호다.
+도시철도도 같다: 역 순서표(`data/processed/subway_line_seq.csv`)가 있으면 구간의 역을 거기서 읽는다(급행처럼 역 개수가 안 맞으면 이름·거리로 찾는다).
+역 실시간 도착 매핑표(`data/processed/subway_live_stations.csv`)는 우리 역 id 를 실시간 API 의 역명·노선(subwayId)에 잇는다 — 실시간 API 는 역명 정확 일치만 받고 옛 이름을 쓰는 역이 있다(DB '능길' ↔ 실시간 '신길온천'). 이 표가 없으면 `/api/arrivals/station/…` 만 `data_not_built`(503) 가 되고, 표에 실시간 이름이 없는 역은 `no_realtime`(404) 이다.
+배차간격 표(`data/processed/headway_bus.csv` · `headway_rail.csv`)가 있으면 대중교통 경로에 **차를 기다리는 시간**을 더한 값도 함께 준다 — 카카오 소요 시간에는 대기가 전혀 없다(차내 시간 + 환승 도보 + 양 끝 도보뿐). 표가 없으면 그 값만 빠진다.
+정류소 CSV·노선 순서표·실시간 역 매핑표·배차간격 표나 `data/ref/line_groups.csv` 를 고친 뒤에는 서버를 다시 시작한다 (시작할 때 한 번 읽는다).
 
 ## 4. 실행
 
@@ -54,13 +71,29 @@ $env:PYTHONUTF8="1"
 | `GET /api/stops/{정류장키}/routes` | 버스 정류장을 지나는 노선 (미정차 제외, 이름 순). `data/processed/bus_route_stops.csv` 가 없으면 `data_not_built`(503) |
 | `GET /api/routes/{노선ID}` | 노선이 지나는 정류장 (운행 순서, 미정차 제외, 같은 정류장은 한 번) — 지도에서 정류장만 강조한다 |
 | `GET /api/boundaries` | 시군구 경계 GeoJSON (서울 25구 + 경기 31시·군) |
-| `GET /api/transit?sx&sy&ex&ey&probe=0` | 대중교통 경로 + 승·하차 정류장 매칭 진단 (`probe=1` 은 응답 구조 요약 추가) |
+| `GET /api/transit?sx&sy&ex&ey&probe=0` | 대중교통 경로 + 승·하차 정류장 매칭 진단 + 배차로 추정한 대기시간 (`probe=1` 은 응답 구조 요약 추가) |
 | `GET /api/car?sx&sy&ex&ey` | 자동차 경로·택시 요금 |
 | `GET /api/search?q=` | 주소·장소 이름 → 출발·도착 후보 (키워드·주소 검색을 함께 불러 번지 주소 → 장소 → 지역 순. `q` 는 100자까지. 한쪽만 실패하면 `failed` 에 적고 다른 쪽 결과를 준다) |
+| `GET /api/arrivals/stop/{정류장키}` | 버스 정류장 실시간 도착 (그 정류장을 등록한 BIS 전부를 함께 부르고 도착 임박 순으로 합친다. 한쪽만 실패하면 `failed` 에 적고 다른 쪽 결과를 준다. 미정차·BIS 없는 정류장은 `no_realtime`(404)) |
+| `GET /api/arrivals/station/{역ID}` | 도시철도 역 실시간 도착 (매핑표의 실시간 역명으로 부르고 그 역의 노선만 남긴다. 원천이 하나라 `failed` 는 항상 빈 목록) |
 | `GET /api/quota` | 오늘 사용량/한도 |
 | `GET /tiles/vworld/{layer}/{z}/{y}/{x}` | VWorld 타일 프록시 (`Base`, `white`, `midnight`, `Hybrid`, `Satellite`; z 6–19, 단 `white`·`midnight` 는 z18 까지만. 프론트는 `Base`(밝은 화면) · `midnight`(다크 모드, z19 에서는 z18 을 확대)만 쓴다) |
 
 오류는 `{"error": {"code", "message", "action", "upstream_status"}}` 형태로 온다.
+
+대기시간(`/api/transit`)은 구간마다 `step.headway_m`(배차 분)·`step.wait_s`, 경로마다 `route.wait_s`·`route.total_with_wait_s`,
+응답 맨 위에 `wait_basis{day_type, hour}` 로 온다. 사람이 아무 때나 온다고 보고 **대기 = 배차 ÷ 2** 이고, 한 구간에서 탈 수 있는
+노선이 여럿이면 빈도를 더한다(유효 배차 = 1 / Σ(1/hᵢ)). 이름이 같은 노선 후보(매칭이 하나로 좁히지 못한 경우)는 한 노선으로 보고
+평균을 쓴다. 한 구간이라도 배차를 모르면 경로 합은 `null` 이다 — 빠진 구간만큼 짧게 나오는 값을 주지 않는다.
+버스는 노선 × 요일 유형(그날 값이 없으면 평일), 도시철도는 역 × 노선군 × 시간대(방향 평균, **평일 시각표** 기준)에서 읽는다.
+
+도착정보의 `eta_s` 는 **기다릴 초**다. 도시철도 예측(`barvlDt`)은 원천이 값을 받은 시각 기준이라 그만큼 빼고(실측 경과 41~281초,
+원천 시계가 앞서 음수로 오는 경우도 있다), 빼서 음수면 예측이 지난 것이니 `null`(모름)로 둔다. 예측이 0 으로 오는 행은
+도착 코드로 가른다 — 진입·도착이면 0, 출발·운행중이면 `null` 이다(그대로 0 으로 담으면 20역 떨어진 열차가 '지금 도착'이 된다).
+`age_s` 로 수신 경과를 함께 주므로 오래된 행은 버리면 된다. 예측이 없는 항목은 남은 역·정류소 수 순으로 뒤에 붙는다.
+
+카카오 응답은 캐시가 금지지만(§6), 공공데이터 도착정보는 저장이 허용되어 같은 (원천, 정류장·역) 요청을 **15초만 메모리에** 둔다 —
+여러 화면이 같은 정류장을 함께 볼 때 쿼터를 아낀다. 캐시 히트는 호출 건수를 늘리지 않고, 디스크에 쓰는 것은 여전히 건수(`quota.json`)뿐이다.
 
 ## 5. 테스트
 

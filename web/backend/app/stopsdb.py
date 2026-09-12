@@ -12,6 +12,7 @@ from geoutil import GridIndex
 from textnorm import name_key
 
 KINDS = ("bus", "subway")
+ID_COL = {"bus": "stop_key", "subway": "station_id"}
 HEAD_LEN = 4  # 접두 일치(절단된 이름) 후보를 찾는 이름 키 앞부분 길이 — resolver.PREFIX_MIN_LEN 과 같다
 _KST = timezone(timedelta(hours=9))  # config 를 import 하지 않으므로 고정 오프셋을 여기 둔다
 _FILES = {"bus": "bus_stops.csv", "subway": "subway_stations.csv"}
@@ -37,6 +38,7 @@ class StopsDB:
         self._by_key = {k: defaultdict(list) for k in KINDS}
         self._by_alias = {k: defaultdict(list) for k in KINDS}
         self._by_head = {k: defaultdict(list) for k in KINDS}
+        self._by_id = {k: {} for k in KINDS}
         for kind, src in zip(KINDS, (bus_rows, subway_rows)):
             rows = self._rows[kind]
             for r in src:
@@ -49,6 +51,7 @@ class StopsDB:
                 r["alias_keys"] = {name_key(a, kind) for a in (r.get("aliases") or "").split("|") if a}
                 i = len(rows)
                 rows.append(r)
+                self._by_id[kind].setdefault(r[ID_COL[kind]], i)
                 if not r["is_virtual"]:
                     self._by_key[kind][r["name_key"]].append(i)
                     for k in r["alias_keys"]:
@@ -90,6 +93,11 @@ class StopsDB:
         rows = self._rows[kind]
         return [(i, d) for i, d in self._grid[kind].near(lon, lat, r_m)
                 if include_virtual or not rows[i]["is_virtual"]]
+
+    def by_id(self, kind, id_):
+        """정류장 키·역 id 로 행을 찾는다 (노선 순서표가 준 키를 붙일 때 쓴다). 없으면 None."""
+        i = self._by_id[kind].get(id_)
+        return None if i is None else self._rows[kind][i]
 
     def by_key(self, kind, key):
         return list(self._by_key[kind].get(key, ()))

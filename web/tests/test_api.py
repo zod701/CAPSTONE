@@ -4,7 +4,9 @@ import json
 import logging
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -18,7 +20,10 @@ TINY = FIX / "tiny_db"
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
 KKEY = "0123456789abcdef0123456789abcdef"  # 가짜 키
 VKEY = "00000000-0000-0000-0000-000000000000"
+DKEY = "fakedatagokrkey0123456789abcdefghij0123456789abcdefghij01234567"  # 가짜 키 (64자 영숫자)
+SKEY = "fakeseoulsubwaylivekey1234567"                                    # 가짜 키 (30자)
 NOTE = "SYNTHETIC - hand-written from documented schema; not a Kakao response"
+NOTE_PUBLIC = "SYNTHETIC - hand-written from documented schema; not a real API response"
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 TRANSIT = json.loads((FIX / "transit_synthetic.json").read_text(encoding="utf-8"))
 CAR = json.loads((FIX / "car_synthetic.json").read_text(encoding="utf-8"))
@@ -34,6 +39,50 @@ BOUNDARIES = {"type": "FeatureCollection", "features": [{
 }]}
 OD = {"sx": 127.0, "sy": 37.266, "ex": 127.1112, "ey": 37.3947}  # 합성 대중교통 1번 경로의 양 끝
 
+# 실시간 도착 — 원천 셋은 호스트가 서로 달라 호스트 키로 갈린다. 값은 tiny DB 의 노선·역에 맞춰 손으로 썼다.
+GG_ARRIVALS = {"_note": NOTE_PUBLIC, "response": {
+    "msgHeader": {"queryTime": "2026-09-12 13:30:09.952", "resultCode": 0,
+                  "resultMessage": "정상적으로 처리되었습니다."},
+    "msgBody": {"busArrivalList": [
+        {"routeId": 204000901, "routeName": 380, "routeTypeCd": 13, "staOrder": 2, "stationId": 204000101,
+         "flag": "PASS", "routeDestId": 204000401, "routeDestName": "야탑역",
+         "predictTime1": 3, "locationNo1": 2, "crowded1": 2, "remainSeatCnt1": 12, "plateNo1": "경기70아1234",
+         "predictTime2": 11, "locationNo2": 7, "crowded2": 3, "remainSeatCnt2": -1, "plateNo2": "경기70아5678"},
+        {"routeId": 204000902, "routeName": 10, "staOrder": 1, "stationId": 204000101, "flag": "PASS",
+         "routeDestName": "분당구청입구", "predictTime1": "", "predictTime2": "", "locationNo1": "",
+         "crowded1": "", "remainSeatCnt1": "", "plateNo1": ""}]}}}   # 도착정보 없는 노선
+SEOUL_ARRIVALS = {"_note": NOTE_PUBLIC,
+                  "msgHeader": {"headerMsg": "정상적으로 처리되었습니다.", "headerCd": "0", "itemCount": 0},
+                  "msgBody": {"itemList": [
+                      {"stId": "100000201", "stNm": "종로2가", "arsId": "01201", "staOrd": "1",
+                       "busRouteId": "100000901", "rtNm": "9", "routeType": "3",
+                       "arrmsg1": "곧 도착", "traTime1": "115", "sectOrd1": "1", "isLast1": "0",
+                       "plainNo1": "서울74사4169",
+                       "arrmsg2": "5분32초후[2번째 전]", "traTime2": "332", "isLast2": "1"},
+                      {"stId": "100000201", "rtNm": "99", "busRouteId": "100000902", "staOrd": "1",
+                       "arrmsg1": "운행종료", "traTime1": "0", "sectOrd1": "0", "isLast1": "0",
+                       "plainNo1": " "}]}}   # 운행종료는 traTime 0 으로 온다 (0초 후가 아니다)
+def subway_arrivals(stamp=None):
+    """지하철 합성 응답. `recptnDt` 는 부를 때 찍는다 — 도착 예측은 수신 시각 기준이라 값을 굳히면
+    시간이 지날수록 '예측이 이미 지났다'(eta_s=None)가 되어 테스트가 무의미해진다."""
+    got = stamp or datetime.now().strftime("%Y-%m-%d %H:%M:%S")   # 원천과 같은 지역시각 문자열
+    return {"_note": NOTE_PUBLIC,
+            "errorMessage": {"status": 200, "code": "INFO-000", "message": "정상 처리되었습니다.",
+                             "link": "", "developerMessage": "", "total": 3},
+            "realtimeArrivalList": [
+        {"subwayId": "1075", "statnNm": "정자", "updnLine": "상행",
+         "trainLineNm": "청량리행 - 수내방면", "barvlDt": "240", "arvlCd": "99",
+         "arvlMsg2": "[2]번째 전역 (수내)", "arvlMsg3": "수내", "btrainSttus": "일반",
+         "btrainNo": "K1234", "bstatnNm": "청량리", "recptnDt": got},
+        {"subwayId": "1075", "statnNm": "정자", "updnLine": "하행",
+         "trainLineNm": "수원행 - 미금방면", "barvlDt": "0", "arvlCd": "2",
+         "arvlMsg2": "정자역 출발", "btrainSttus": "급행", "btrainNo": "K3080",
+         "bstatnNm": "수원", "recptnDt": got},
+        {"subwayId": "1077", "statnNm": "정자", "updnLine": "하행",
+         "trainLineNm": "광교행 - 판교방면", "barvlDt": "60", "arvlCd": "1",
+         "arvlMsg2": "[1]번째 전역 (판교)", "btrainSttus": "일반", "btrainNo": "D5678",
+         "bstatnNm": "광교", "recptnDt": got}]}
+
 
 class Upstream:
     """호스트별(로컬 검색은 경로별) 합성 응답. 테스트가 `routes[host 또는 path]` 를 바꿔 오류를 흉내 낸다."""
@@ -45,6 +94,10 @@ class Upstream:
             ADDRESS_PATH: lambda req: httpx.Response(200, json=ADDRESS),
             "apis-navi.kakaomobility.com": lambda req: httpx.Response(200, json=CAR),
             "api.vworld.kr": lambda req: httpx.Response(200, content=PNG, headers={"content-type": "image/png"}),
+            # 실시간 도착 세 원천 — 지하철은 경로에 키·역명이 들어가 경로 키로는 못 잡는다
+            "apis.data.go.kr": lambda req: httpx.Response(200, json=GG_ARRIVALS),
+            "ws.bus.go.kr": lambda req: httpx.Response(200, json=SEOUL_ARRIVALS),
+            "swopenapi.seoul.go.kr": lambda req: httpx.Response(200, json=subway_arrivals()),
         }
         self.requests = []
 
@@ -56,7 +109,7 @@ class Upstream:
         return [r.url.host for r in self.requests]
 
 
-def make_settings(tmp_path, with_db=True, **overrides):
+def make_settings(tmp_path, with_db=True, with_headway=True, **overrides):
     processed, ref = tmp_path / "processed", tmp_path / "ref"
     processed.mkdir()
     ref.mkdir()
@@ -64,10 +117,16 @@ def make_settings(tmp_path, with_db=True, **overrides):
         shutil.copy(TINY / "bus_stops.csv", processed)
         shutil.copy(TINY / "subway_stations.csv", processed)
         shutil.copy(TINY / "bus_route_stops.csv", processed)
+        shutil.copy(TINY / "subway_line_seq.csv", processed)
+        shutil.copy(TINY / "subway_live_stations.csv", processed)
         shutil.copy(TINY / "line_groups.csv", ref)
+        if with_headway:
+            shutil.copy(TINY / "headway_bus.csv", processed)
+            shutil.copy(TINY / "headway_rail.csv", processed)
         (processed / "admin_sgg_web.geojson").write_text(json.dumps(BOUNDARIES), encoding="utf-8")
     fields = dict(repo_root=tmp_path, processed_dir=processed, ref_dir=ref, frontend_dir=FRONTEND,
-                  quota_path=tmp_path / "var" / "quota.json", kakao_rest_key=KKEY, vworld_key=VKEY)
+                  quota_path=tmp_path / "var" / "quota.json", kakao_rest_key=KKEY, vworld_key=VKEY,
+                  data_go_kr_key=DKEY, seoul_subway_live_key=SKEY)
     return Settings(**{**fields, **overrides})
 
 
@@ -94,7 +153,7 @@ def error(r, status, code):
 
 
 def no_keys(text):
-    assert KKEY not in text and VKEY not in text
+    assert all(k not in text for k in (KKEY, VKEY, DKEY, SKEY))
 
 
 # --- 앱 구성 ---
@@ -111,7 +170,7 @@ def test_health(client):
     r = client.get("/api/health")
     assert r.status_code == 200
     h = r.json()
-    assert (h["ready"], h["bus_stops"], h["subway_stations"]) == (True, 9, 4)
+    assert (h["ready"], h["bus_stops"], h["subway_stations"]) == (True, 17, 5)
     assert h["keys"] == {"vworld": True, "kakao_rest": True}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+09:00", h["data_mtime"])
     no_keys(r.text)
@@ -162,7 +221,7 @@ def test_stops_truncation(client):
 
 def test_stops_subway_all_without_bbox(client):
     body = client.get("/api/stops", params={"kinds": "subway"}).json()
-    assert (body["count"], body["truncated"], body["bus"]) == (4, False, [])
+    assert (body["count"], body["truncated"], body["bus"]) == (5, False, [])
     item = next(s for s in body["subway"] if s["id"] == "bundang-K222")
     assert set(item) == SUBWAY_KEYS
     assert item == {"id": "bundang-K222", "name": "정자", "line": "분당선", "group": "수인분당선",
@@ -277,18 +336,19 @@ def test_transit_happy_path(client, up):
     assert (bus["board"]["chosen"]["id"], bus["board"]["match_level"], bus["board"]["name_conflict"]) \
         == ("100000201", "prefix", True)
     assert bus["alight"]["chosen"]["id"] == "100000202"
-    # 정류소 전부의 위치 (DB 에 없는 기흥·종로1가는 선 위 추정: id·level 없음)
-    assert [x["id"] for x in s0["stop_locs"]] == ["bundang-K245", None, "bundang-K222"]
+    # 정류소 전부의 위치. 도시철도 구간은 역 순서표에서 읽는다 — 옛 이름 '신길온천' 도 제자리에 놓인다(DB 는 '능길')
+    assert [(x["id"], x["level"]) for x in s0["stop_locs"]]         == [("bundang-K245", "route"), ("bundang-K240", "route"), ("bundang-K222", "route")]
+    # 버스는 순서표에 없는 노선이라(470) 이름·기하로 찾는다 — DB 에 없는 종로1가는 선 위 추정(id·level 없음)
     assert [x["id"] for x in s2["stop_locs"]] == ["shinbundang-D12", "shinbundang-D13"]
     assert [(x["id"], x["level"]) for x in r1["steps"][0]["stop_locs"]] \
         == [("100000201", "prefix"), (None, None), ("100000202", "key")]
     assert s1["stop_locs"] is None
 
     assert (r0["diag_summary"]["n"], r0["diag_summary"]["matched"]) == (4, 4)
-    assert r1["diag_summary"]["levels"] == {"key": 1, "alias": 0, "prefix": 1}
+    assert r1["diag_summary"]["levels"] == {"key": 1, "alias": 0, "parts": 0, "prefix": 1, "route": 0}
     top = body["diag_summary"]
     assert (top["n"], top["matched"], top["match_rate"]) == (6, 6, 1.0)
-    assert top["levels"] == {"key": 5, "alias": 0, "prefix": 1}
+    assert top["levels"] == {"key": 5, "alias": 0, "parts": 0, "prefix": 1, "route": 0}
     assert (top["by_kind"]["bus"]["n"], top["by_kind"]["subway"]["n"]) == (2, 4)
     assert top["unmapped_vehicle_names"] == []
 
@@ -315,6 +375,45 @@ def test_transit_diag_dedupe_and_unmapped(tmp_path, up):
     assert body["diag_summary"]["unmapped_vehicle_names"] == ["우이신설선"]
     step = body["routes"][2]["steps"][0]
     assert (step["line_group"], step["color"], step["resolution"]["board"]["line_filter"]) == (None, None, "unmapped")
+
+
+# 순서표에 있는 노선(380)으로 만든 버스 경로 — 배차표에서 대기시간을 찾으려면 노선이 가려져야 한다
+BUS_380 = {"properties": {"type": "BUS", "totalTime": 780, "totalDistance": 4200, "transfers": 0,
+                          "fare": {"value": 1450}},
+           "steps": [{"properties": {"type": "BUS", "time": 780, "distance": 4200,
+                                     "guidance": "380 (분당구청 > 판교테크노)",
+                                     "vehicles": [{"type": "BUS", "name": "380"}],
+                                     "stops": [{"name": "분당구청"}, {"name": "판교테크노"}]},
+                      "path": {"points": [[127.1190, 37.3825], [127.1123, 37.3948]]}}]}
+
+
+def test_transit_wait_from_headway(tmp_path, up):
+    """카카오 시간에는 대기가 없다 — 배차(380 은 10~20분, 중간 15분)의 절반을 더한 값도 함께 준다."""
+    up.routes["dapi.kakao.com"] = lambda req: httpx.Response(200, json={**TRANSIT, "routes": [BUS_380]})
+    with serve(make_settings(tmp_path), up) as c:
+        body = c.get("/api/transit", params=OD).json()
+    assert body["wait_basis"]["day_type"] in ("평일", "토요일", "일요일")
+    r = body["routes"][0]
+    step = r["steps"][0]
+    assert step["route_ids"] == ["204000901"]
+    assert (step["headway_m"], step["wait_s"]) == (15.0, 450)
+    assert (r["wait_s"], r["total_with_wait_s"]) == (450, 1230)
+
+
+def test_transit_wait_is_empty_when_route_is_not_in_the_table(tmp_path, up):
+    """합성 경로의 버스 470 은 순서표에 없어 노선을 못 가린다 → 경로 합은 주지 않는다."""
+    with serve(make_settings(tmp_path), up) as c:
+        body = c.get("/api/transit", params=OD).json()
+    bus = body["routes"][1]
+    assert (bus["steps"][0]["route_ids"], bus["steps"][0]["wait_s"]) == ([], None)
+    assert (bus["wait_s"], bus["total_with_wait_s"]) == (None, None)
+
+
+def test_transit_without_headway_table(tmp_path, up):
+    with serve(make_settings(tmp_path, with_headway=False), up) as c:
+        body = c.get("/api/transit", params=OD).json()
+    assert body["wait_basis"] is None
+    assert all("wait_s" not in r for r in body["routes"])
 
 
 def test_transit_without_db(tmp_path, up):
@@ -399,11 +498,14 @@ def test_car(client, up):
 
 def test_quota(client):
     q = client.get("/api/quota").json()
-    assert set(q) == {"date", "transit", "car", "keyword", "address"}
+    assert set(q) == {"date", "transit", "car", "keyword", "address",
+                      "gyeonggi_bus", "seoul_bus", "seoul_subway"}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", q["date"])
     assert q["transit"] == {"used": 0, "limit": 1000, "remaining": 1000}
     assert q["car"] == {"used": 0, "limit": 10000, "remaining": 10000}
     assert q["keyword"] == q["address"] == {"used": 0, "limit": 100000, "remaining": 100000}
+    # 도착정보 세 원천은 개발계정 한도와 같게 1,000건/일
+    assert q["gyeonggi_bus"] == q["seoul_bus"] == q["seoul_subway"] == {"used": 0, "limit": 1000, "remaining": 1000}
 
 
 # --- /api/search ---
@@ -479,6 +581,201 @@ def test_search_local_quota_blocks_only_that_kind(tmp_path, up):
     assert body["quota"]["keyword"] == {"used": 1, "limit": 1, "remaining": 0}
 
 
+# --- /api/arrivals/stop (버스 정류장 실시간 도착) ---
+
+BUS_ITEM_KEYS = {"source", "route_id", "route_name", "route_type", "eta_s", "n_stops_ahead", "crowding",
+                 "seats", "is_last", "vehicle", "message", "dest"}
+RAIL_ITEM_KEYS = {"direction", "eta_s", "age_s", "n_stops_ahead", "message", "train_type", "dest",
+                  "headsign", "train_no"}
+
+
+def test_arrivals_stop_merges_both_bis(client, up):
+    r = client.get("/api/arrivals/stop/204000101")   # source_ids = GGB…|SEB… (두 BIS 가 등록한 정류장)
+    assert r.status_code == 200
+    assert "cache-control" not in r.headers   # no-store 는 카카오 경유 응답에만 붙인다 (공공데이터는 안 붙인다)
+    no_keys(r.text)
+    assert "SYNTHETIC" not in r.text    # 원문을 그대로 넘기지 않는다
+    body = r.json()
+    assert set(body) == {"stop", "name", "items", "failed", "quota"}
+    assert (body["stop"], body["name"], body["failed"]) == ("204000101", "분당구청", [])
+    assert set(body["items"][0]) == BUS_ITEM_KEYS
+    # 두 원천을 도착 임박 순으로 섞고, 값 없는 항목(도착정보 없음·운행종료)은 뒤로 보낸다
+    assert [(i["source"], i["route_name"], i["eta_s"]) for i in body["items"]] == [
+        ("seoul", "9", 115), ("gyeonggi", "380", 180), ("seoul", "9", 332), ("gyeonggi", "380", 660),
+        ("gyeonggi", "10", None), ("seoul", "99", None)]
+    assert body["items"][1] == {"source": "gyeonggi", "route_id": "204000901", "route_name": "380",
+                                "route_type": "일반", "eta_s": 180, "n_stops_ahead": 2, "crowding": 2,
+                                "seats": 12, "is_last": None, "vehicle": "경기70아1234", "message": None,
+                                "dest": "야탑역"}
+    assert body["items"][2] == {"source": "seoul", "route_id": "100000901", "route_name": "9",
+                                "route_type": None, "eta_s": 332, "n_stops_ahead": 2, "crowding": None,
+                                "seats": None, "is_last": True, "vehicle": None,
+                                "message": "5분32초후[2번째 전]", "dest": None}
+    assert [i["message"] for i in body["items"][4:]] == ["도착 정보가 없습니다.", "운행종료"]
+    assert (body["quota"]["gyeonggi_bus"]["used"], body["quota"]["seoul_bus"]["used"]) == (1, 1)
+    assert body["quota"]["seoul_subway"]["used"] == 0
+    # 업스트림 정류소 id 는 source_ids 에서 접두어를 뗀 값이다 (stop_key 를 그대로 쓰지 않는다)
+    by_host = {q.url.host: q for q in up.requests}
+    assert set(by_host) == {"apis.data.go.kr", "ws.bus.go.kr"}
+    assert dict(by_host["apis.data.go.kr"].url.params) == {"format": "json", "stationId": "204000101",
+                                                           "serviceKey": DKEY}
+    assert dict(by_host["ws.bus.go.kr"].url.params) == {"stId": "204000101", "resultType": "json",
+                                                        "serviceKey": DKEY}
+
+
+def test_arrivals_stop_single_bis(tmp_path, up):
+    with serve(make_settings(tmp_path), up) as c:
+        gg = c.get("/api/arrivals/stop/204000102").json()      # GGB 만 등록
+        seoul = c.get("/api/arrivals/stop/100000201").json()   # SEB 만 등록
+    assert up.hosts() == ["apis.data.go.kr", "ws.bus.go.kr"]   # 등록한 BIS 만 부른다
+    assert (gg["name"], gg["failed"]) == ("분당구청", [])
+    assert {i["source"] for i in gg["items"]} == {"gyeonggi"}
+    # 서울 응답도 busRouteId 를 주므로 순서표에서 노선 유형을 채운다
+    assert [(i["route_name"], i["route_type"]) for i in seoul["items"]] \
+        == [("9", "마을"), ("9", "마을"), ("99", "마을")]
+    assert (seoul["quota"]["gyeonggi_bus"]["used"], seoul["quota"]["seoul_bus"]["used"]) == (1, 1)
+
+
+def test_arrivals_stop_partial_failure(tmp_path, up):
+    # 서울 버스 실측: 미신청 키·키 오류는 HTTP 401 {"error": {...}}
+    up.routes["ws.bus.go.kr"] = lambda req: httpx.Response(401, json={"error": {"code": "401"}})
+    with serve(make_settings(tmp_path), up) as c:
+        r = c.get("/api/arrivals/stop/204000101")
+        q = c.get("/api/quota").json()
+    assert r.status_code == 200
+    body = r.json()
+    assert {i["source"] for i in body["items"]} == {"gyeonggi"}
+    assert body["failed"] == [{"source": "seoul", "code": "arrivals_auth",
+                               "message": "서울 버스 도착정보 원천이 API 키를 거부했습니다."}]
+    assert (q["gyeonggi_bus"]["used"], q["seoul_bus"]["used"]) == (1, 0)  # 쿼터를 쓰지 않은 거절은 되돌린다
+    no_keys(r.text)
+
+
+def test_arrivals_stop_both_fail(tmp_path, up):
+    fail = lambda req: httpx.Response(500, text="<html>error</html>")  # noqa: E731
+    up.routes["apis.data.go.kr"] = up.routes["ws.bus.go.kr"] = fail
+    with serve(make_settings(tmp_path), up) as c:
+        r = c.get("/api/arrivals/stop/204000101")
+    err = error(r, 502, "upstream_error")   # 둘 다 실패하면 첫 원천(경기)의 오류를 봉투로 올린다
+    assert err["message"] == "경기 버스 도착정보 요청이 실패했습니다 (HTTP 500)."
+    assert err["upstream_status"] == 500
+    no_keys(r.text)
+
+
+@pytest.mark.parametrize("stop_key, code, message", [
+    ("204000103", "no_realtime", "미정차 정류소에는 실시간 도착 정보가 없습니다."),
+    ("nope", "not_found", "정류장을 찾을 수 없습니다."),
+])
+def test_arrivals_stop_rejected_before_upstream(client, up, stop_key, code, message):
+    err = error(client.get(f"/api/arrivals/stop/{stop_key}"), 404, code)
+    assert err["message"] == message
+    assert up.requests == []
+
+
+def test_arrivals_stop_quota_blocks_only_that_source(tmp_path, up):
+    with serve(make_settings(tmp_path, gyeonggi_bus_daily_limit=1), up) as c:
+        assert c.get("/api/arrivals/stop/204000101").json()["failed"] == []
+        body = c.get("/api/arrivals/stop/204000301").json()   # 다른 정류장 — 캐시가 아니라 새 호출
+    assert {i["source"] for i in body["items"]} == {"seoul"}
+    assert [(f["source"], f["code"]) for f in body["failed"]] == [("gyeonggi", "quota_exceeded")]
+    assert "경기 버스 도착정보" in body["failed"][0]["message"] and "(1건)" in body["failed"][0]["message"]
+    assert up.hosts().count("apis.data.go.kr") == 1   # 두 번째 요청은 원천을 부르지 않았다
+    assert body["quota"]["gyeonggi_bus"] == {"used": 1, "limit": 1, "remaining": 0}
+
+
+def test_arrivals_stop_cache_saves_quota(client, up):
+    first = client.get("/api/arrivals/stop/204000101").json()
+    again = client.get("/api/arrivals/stop/204000101").json()
+    assert again["items"] == first["items"]
+    assert (again["quota"]["gyeonggi_bus"]["used"], again["quota"]["seoul_bus"]["used"]) == (1, 1)
+    assert sorted(up.hosts()) == ["apis.data.go.kr", "ws.bus.go.kr"]  # 15초 캐시 — 두 번째는 부르지 않았다
+
+
+def test_arrivals_zero_ttl_always_calls(tmp_path, up):
+    with serve(make_settings(tmp_path, arrivals_cache_ttl_s=0), up) as c:
+        c.get("/api/arrivals/stop/204000101")
+        stop = c.get("/api/arrivals/stop/204000101").json()
+        c.get("/api/arrivals/station/bundang-K222")
+        station = c.get("/api/arrivals/station/bundang-K222").json()
+    assert [up.hosts().count(h) for h in ("apis.data.go.kr", "ws.bus.go.kr", "swopenapi.seoul.go.kr")] == [2, 2, 2]
+    assert stop["quota"]["gyeonggi_bus"]["used"] == 2
+    assert station["quota"]["seoul_subway"]["used"] == 2
+
+
+def test_arrivals_without_db(tmp_path, up):
+    with serve(make_settings(tmp_path, with_db=False), up) as c:
+        for path in ("/api/arrivals/stop/204000101", "/api/arrivals/station/bundang-K222"):
+            err = error(c.get(path), 503, "data_not_built")
+            assert err["message"] == "정제 데이터가 없습니다."
+    assert up.requests == []
+
+
+# --- /api/arrivals/station (도시철도 역 실시간 도착) ---
+
+def test_arrivals_station_filters_by_line(client, up):
+    r = client.get("/api/arrivals/station/bundang-K222")
+    assert r.status_code == 200
+    no_keys(r.text)
+    assert "SYNTHETIC" not in r.text
+    body = r.json()
+    assert set(body) == {"station", "name", "line_group", "items", "failed", "quota"}
+    assert (body["station"], body["name"], body["line_group"], body["failed"]) \
+        == ("bundang-K222", "정자", "수인분당선", [])   # 원천이 하나라 failed 는 모양만 맞춘 빈 목록
+    assert set(body["items"][0]) == RAIL_ITEM_KEYS
+    # 예측이 있는 열차가 먼저, '출발'(이 역을 떠난 열차)은 eta 가 없어 뒤로 간다
+    assert [(i["direction"], i["eta_s"], i["n_stops_ahead"], i["message"]) for i in body["items"]] == [
+        ("상행", 240, 2, "[2]번째 전역 (수내)"),
+        ("하행", None, None, "정자역 출발")]
+    assert [i["train_no"] for i in body["items"]] == ["K1234", "K3080"]
+    assert all(i["age_s"] == 0 for i in body["items"])      # 방금 수신한 값 → 보정 0
+    assert body["quota"]["seoul_subway"]["used"] == 1
+    # 환승역은 역명이 같아 한 응답에 여러 노선이 섞여 온다 — 걸러 쓰므로 노선이 늘어도 쿼터는 한 건이다
+    other = client.get("/api/arrivals/station/shinbundang-D12").json()
+    assert (other["line_group"], [i["dest"] for i in other["items"]]) == ("신분당선", ["광교"])
+    assert other["quota"]["seoul_subway"]["used"] == 1
+    assert up.hosts() == ["swopenapi.seoul.go.kr"]
+    # 페이지 크기는 넉넉히 — 20 이면 노선이 여럿 걸친 역(서울역 total=22)에서 뒤 노선이 잘린다
+    assert all(unquote(q.url.path).endswith("/0/60/정자") for q in up.requests)
+
+
+def test_arrivals_station_uses_live_name(client, up):
+    body = client.get("/api/arrivals/station/bundang-K240").json()   # DB '능길' ↔ 실시간 '신길온천' (실측 사례)
+    assert body["name"] == "능길"
+    assert unquote(up.requests[0].url.path).endswith("/0/60/신길온천")
+    assert SKEY in unquote(up.requests[0].url.path)          # 지하철은 전용 키를 경로에 넣는다
+    no_keys(json.dumps(body, ensure_ascii=False))            # 그래도 응답에는 새지 않는다
+
+
+def test_arrivals_station_no_realtime_and_not_found(client, up):
+    err = error(client.get("/api/arrivals/station/bundang-K245"), 404, "no_realtime")  # 매핑표에 실시간 이름이 없다
+    assert err["message"] == "이 역은 실시간 도착 정보를 제공하지 않습니다."
+    assert "headway_rail.csv" in err["action"] and "headway_bus.csv" in err["action"]
+    assert error(client.get("/api/arrivals/station/nope"), 404, "not_found")["message"] == "역을 찾을 수 없습니다."
+    assert up.requests == []
+
+
+def test_arrivals_station_without_map(tmp_path, up):
+    s = make_settings(tmp_path)
+    (s.processed_dir / "subway_live_stations.csv").unlink()
+    with serve(s, up) as c:
+        err = error(c.get("/api/arrivals/station/bundang-K222"), 503, "data_not_built")
+        assert err["message"] == "도시철도 실시간 역 매핑표가 없습니다."
+        assert "build_subway_live_map.py" in err["action"]
+        assert c.get("/api/health").json()["ready"] is True            # 나머지 데이터는 그대로 쓴다
+        assert c.get("/api/arrivals/stop/204000101").status_code == 200  # 버스 도착은 매핑표를 쓰지 않는다
+
+
+@pytest.mark.parametrize("path, field, env", [
+    ("/api/arrivals/stop/204000101", "data_go_kr_key", "DATA_GO_KR_API_KEY"),
+    ("/api/arrivals/station/bundang-K222", "seoul_subway_live_key", "SEOUL_SUBWAY_LIVE_API"),
+])
+def test_arrivals_missing_key(tmp_path, up, path, field, env):
+    with serve(make_settings(tmp_path, **{field: None}), up) as c:
+        err = error(c.get(path), 503, "missing_key")
+    assert env in err["action"]
+    assert up.requests == []   # 키가 없으면 원천을 부르지 않는다
+
+
 # --- 타일 프록시 ---
 
 def test_tile_proxy(client, up):
@@ -504,9 +801,13 @@ def test_tos_guard_nothing_kept(tmp_path, up, caplog):
         assert c.get("/api/transit", params={**OD, "probe": 1}).status_code == 200
         assert c.get("/api/car", params=OD).status_code == 200
         assert c.get("/api/search", params={"q": "합성"}).status_code == 200
+        # 공공데이터 도착정보는 저장이 허용되지만 15초 캐시는 메모리 전용이다 (디스크에는 건수만)
+        assert c.get("/api/arrivals/stop/204000101").status_code == 200
+        assert c.get("/api/arrivals/station/bundang-K222").status_code == 200
     assert files_under(tmp_path) == created | {s.quota_path}  # 카카오 응답은 디스크에 남지 않는다
     assert set(json.loads(s.quota_path.read_text(encoding="utf-8"))) == {"date", "used"}  # 건수만
-    for text in (KKEY, "수인분당선 (수원 > 정자)", "합성로1", "합성타워", "합성테크노밸리"):
+    for text in (KKEY, DKEY, SKEY, "수인분당선 (수원 > 정자)", "합성로1", "합성타워", "합성테크노밸리",
+                 "경기70아1234", "운행종료", "정자역 출발"):
         assert text not in caplog.text  # 키·응답 본문을 로그에 남기지 않는다
 
 

@@ -30,6 +30,14 @@ class Settings:
     radius_m: dict = field(default_factory=lambda: {"bus": 300.0, "subway": 1000.0})
     ambig_gap_m: dict = field(default_factory=lambda: {"bus": 10.0, "subway": 150.0})
     http_timeout_s: float = 10.0
+    # 공공데이터 실시간 도착 — 세 원천 모두 개발계정 1,000건/일
+    gyeonggi_bus_daily_limit: int = 1000
+    seoul_bus_daily_limit: int = 1000
+    seoul_subway_daily_limit: int = 1000
+    arrivals_timeout_s: float = 5.0      # 늦게 온 실시간 값은 쓸모가 없다 — 카카오(10초)보다 짧게
+    arrivals_cache_ttl_s: float = 15.0   # 같은 정류장을 여러 화면이 함께 볼 때 쿼터를 아낀다 (공공데이터라 허용)
+    data_go_kr_key: str | None = field(default=None, repr=False)          # 경기·서울 버스 도착정보 (같은 키)
+    seoul_subway_live_key: str | None = field(default=None, repr=False)   # 서울 열린데이터광장 실시간 지하철
 
 
 def _env(name):
@@ -53,5 +61,10 @@ def load_settings(env_file: Path | None = None, **overrides) -> Settings:
         car_daily_limit=int(_env("KAKAO_CAR_DAILY_LIMIT") or 10000),
         keyword_daily_limit=int(_env("KAKAO_KEYWORD_DAILY_LIMIT") or 100000),
         address_daily_limit=int(_env("KAKAO_ADDRESS_DAILY_LIMIT") or 100000),
+        data_go_kr_key=_env("DATA_GO_KR_API_KEY"),
+        seoul_subway_live_key=_env("SEOUL_SUBWAY_LIVE_API"),
+        gyeonggi_bus_daily_limit=int(_env("GYEONGGI_BUS_DAILY_LIMIT") or 1000),
+        seoul_bus_daily_limit=int(_env("SEOUL_BUS_DAILY_LIMIT") or 1000),
+        seoul_subway_daily_limit=int(_env("SEOUL_SUBWAY_DAILY_LIMIT") or 1000),
     )
     return replace(s, **overrides)

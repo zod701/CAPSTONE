@@ -36,7 +36,7 @@ def ids(db, kind, indices):
 
 
 def test_load_counts_and_row_types(db):
-    assert db.counts == {"bus": 9, "subway": 4}
+    assert db.counts == {"bus": 17, "subway": 5}
     r = db.row("bus", idx(db, "bus", "204000301"))
     assert isinstance(r["lat"], float) and isinstance(r["lon"], float)
     assert r["is_virtual"] is False
@@ -68,8 +68,8 @@ def test_bbox_excludes_virtual_unless_asked(db):
 
 def test_bbox_wide_range_scans_all(db):
     # 세계 전체 범위도 셀을 돌지 않고 바로 답한다
-    assert len(db.bbox("bus", -180, -90, 180, 90)) == 8
-    assert len(db.bbox("bus", -180, -90, 180, 90, include_virtual=True)) == 9
+    assert len(db.bbox("bus", -180, -90, 180, 90)) == 16
+    assert len(db.bbox("bus", -180, -90, 180, 90, include_virtual=True)) == 17
 
 
 def test_near_sorted_and_excludes_virtual(db):

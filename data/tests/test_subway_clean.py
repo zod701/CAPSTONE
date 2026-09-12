@@ -346,7 +346,8 @@ def _read_ref(name):
 def test_ref_tables_consistent():
     lines, groups = _read_ref("subway_line_map.csv"), _read_ref("line_groups.csv")
     assert list(lines[0]) == ["raw_line_name", "line_id", "line_group"]
-    assert list(groups[0]) == ["line_group", "label", "color", "kakao_names"]
+    # gtfs_names 는 배차 표(build_headway.py)가 GTFS 노선명을 잇는 데 쓴다
+    assert list(groups[0]) == ["line_group", "label", "color", "kakao_names", "gtfs_names"]
     raw = [r["raw_line_name"] for r in lines]
     assert len(set(raw)) == len(raw) and all(collapse_ws(s) == s for s in raw)
     assert len({r["line_id"] for r in lines}) == len(lines)

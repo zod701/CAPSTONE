@@ -1,0 +1,6 @@
+chain_id,chain_name,line_group,line_raw,loop,seq,station_id,phys_id,name,lat,lon,status,source,src_no,src_name
+bundang,분당선,수인분당선,분당선,0,1,bundang-K245,bundang-K245,수원,37.2660000,126.9998000,db,comp,K245,수원
+bundang,분당선,수인분당선,분당선,0,2,bundang-K240,bundang-K240,능길,37.3100000,127.0500000,db,renamed,K240,신길온천
+bundang,분당선,수인분당선,분당선,0,3,bundang-K222,bundang-K222,정자,37.3672000,127.1084000,db,comp,K222,정자
+shinbundang,신분당선,신분당선,신분당선,0,1,shinbundang-D12,bundang-K222,정자,37.3669000,127.1088000,db,comp,D12,정자
+shinbundang,신분당선,신분당선,신분당선,0,2,shinbundang-D13,shinbundang-D13,판교(판교테크노밸리),37.3948000,127.1112000,db,comp,D13,판교

@@ -41,6 +41,37 @@ def test_old_table_without_route_type(tmp_path):
     assert (route["type"], [s["key"] for s in route["stops"]]) == ("", ["204000401", "204000101", "204000201", "204000301"])
 
 
+def test_routes_by_name(db):
+    assert db.routes_by_name("380") == ("204000901",)
+    assert db.routes_by_name(" 9-1 ") == ("204000903",)   # 카카오 차량 이름의 공백은 무시한다
+    assert db.routes_by_name("9") == ("100000901",)       # '9-1' 과 다른 노선
+    assert db.routes_by_name("없는노선") == () and db.routes_by_name(None) == ()
+
+
+def test_routes_by_name_falls_back_to_loose_name(db):
+    # 카카오는 요일별 운행을 '11-A(평일 출퇴근)' 처럼 갈라 부르지만 순서표에는 노선 하나뿐이다
+    assert db.routes_by_name("380(주말)") == ("204000901",)
+    assert db.routes_by_name("10-A(평일 출퇴근)") == ("204000902",)
+    assert db.routes_by_name("9-1") == ("204000903",)   # 그대로 맞는 이름이 먼저다
+    assert db.routes_by_name("380-Z") == ("204000901",)
+
+
+def test_sequence_and_stop(db):
+    assert db.sequence("204000901") == ("204000401", "204000101", "204000201",
+                                        "204000301", "204000201", "204000401")
+    assert db.sequence("nope") == ()
+    assert db.stop("100000999") == ("새정류소", 37.573, 126.97)   # 정류소 DB 에 없는 정류소도 있다
+    assert db.stop("nope") is None
+
+
+def test_order_of_marks_first_and_last_pass(db):
+    o = db.order_of("204000901")
+    assert o["204000401"] == (0, 5)   # 회차해 되돌아오는 정류장 — 처음과 마지막 순서가 다르다
+    assert (o["204000101"], o["204000201"], o["204000301"]) == ((1, 1), (2, 4), (3, 3))
+    assert "204000103" not in o       # 미정차
+    assert db.order_of("nope") == {}
+
+
 def test_unknown_or_virtual(db):
     assert db.routes_at("204000103") == []  # 미정차 — 타고 내릴 수 없다
     assert db.routes_at("nope") == []
