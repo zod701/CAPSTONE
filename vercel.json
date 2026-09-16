@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["icn1"],
+  "functions": {
+    "index.py": {
+      "excludeFiles": "{data/csv/**,data/external/**,data/reports/**,data/tests/**,data/processed/admin_sgg.geojson,web/tests/**,algo/tests/**,algo/out/**,**/__pycache__/**,.venv/**,*.md}"
+    }
+  }
+}

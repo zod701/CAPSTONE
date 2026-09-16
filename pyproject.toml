@@ -1,0 +1,13 @@
+# Vercel 배포용 — 런타임 의존성과 진입점만 둔다 (테스트 설정은 pytest.ini, 로컬 의존성은 web/requirements.txt)
+[project]
+name = "baroga"
+version = "0.1.0"
+requires-python = "==3.13.*"
+dependencies = [
+    "fastapi>=0.115",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[tool.vercel]
+entrypoint = "index:app"
