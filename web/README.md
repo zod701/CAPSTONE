@@ -138,3 +138,12 @@ $env:PYTHONUTF8="1"
   카카오 공식 답변(devtalk 151435)은 "저장하여 사용하는 행위는 허용하지 않으며 실시간(라이브) 호출로만 이용" 이라는 원칙만 있고 같은 화면 안에서 받은 결과를 다시 쓰는 경우는 따로 언급하지 않는다 — 보관하지 않고 짧은 시간 안에만 쓰는 쪽으로 해석했다.
 - 테스트 픽스처는 문서 스키마를 보고 손으로 쓴 합성 데이터다(`"_note": "SYNTHETIC ..."`). 실제 응답을 픽스처로 저장하지 않는다.
 - 경로를 표시할 때 `© Kakao, Kakao Mobility` 를 표기한다.
+
+## 7. 배포 (Vercel)
+
+- 진입점: 저장소 루트 `index.py` 의 `app` (`pyproject.toml` 의 `tool.vercel.entrypoint`). 의존성도 `pyproject.toml` 에 있다(Python 3.13).
+- 프론트(`web/frontend`)는 `StaticFiles` 마운트라 빌드 때 CDN 으로 올라가고, `/api`·`/tiles` 만 함수가 받는다.
+- 함수 리전은 서울(`icn1`, `vercel.json`) — 공공데이터·VWorld API 가 해외 IP 를 막을 수 있고, 카카오까지 지연도 줄인다.
+- Vercel 은 git 에서 빌드하므로 서버가 읽는 `data/processed/` 8개 파일은 저장소에 둔다(`.gitignore` 예외). 데이터를 다시 만들면 함께 커밋한다.
+- 키는 `.env` 대신 Vercel 프로젝트 환경 변수로 넣는다: `KAKAO_REST_API_KEY`, `VWORLD_API_KEY`, `DATA_GO_KR_API_KEY`, `SEOUL_SUBWAY_LIVE_API` (한도 변수는 선택).
+- **쿼터 카운트는 근사치다**: 함수는 `/tmp` 에만 쓸 수 있어(`VERCEL` 환경 변수가 있으면 `/tmp/baroga/quota.json`) 인스턴스마다 따로 세고 새로 뜨면 0 부터 센다. 실제 한도는 카카오가 막고(-10 → 그날 소진 처리), 정확한 공유 카운트가 필요하면 외부 저장소(예: Upstash Redis)로 옮겨야 한다.

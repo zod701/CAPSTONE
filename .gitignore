@@ -13,7 +13,16 @@ data/csv/
 
 # 재생성 가능한 데이터 (스크립트로 다시 만든다)
 data/external/
-data/processed/
+# 서버가 읽는 정제 결과만 저장소에 둔다 — Vercel 은 git 에서 빌드하므로 원본(csv)으로 다시 만들 수 없다
+data/processed/*
+!data/processed/bus_stops.csv
+!data/processed/bus_route_stops.csv
+!data/processed/subway_stations.csv
+!data/processed/subway_line_seq.csv
+!data/processed/subway_live_stations.csv
+!data/processed/headway_bus.csv
+!data/processed/headway_rail.csv
+!data/processed/admin_sgg_web.geojson
 
 # 런타임 상태 (쿼터 카운트)
 web/backend/var/

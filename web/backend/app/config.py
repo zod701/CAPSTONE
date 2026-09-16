@@ -54,7 +54,9 @@ def load_settings(env_file: Path | None = None, **overrides) -> Settings:
         processed_dir=REPO_ROOT / "data" / "processed",
         ref_dir=REPO_ROOT / "data" / "ref",
         frontend_dir=REPO_ROOT / "web" / "frontend",
-        quota_path=REPO_ROOT / "web" / "backend" / "var" / "quota.json",
+        # Vercel 함수는 /tmp 에만 쓸 수 있다 — 인스턴스마다 따로이고 새로 뜨면 비므로 건수는 근사치다(web/README.md 배포)
+        quota_path=Path("/tmp/baroga/quota.json") if os.environ.get("VERCEL")
+        else REPO_ROOT / "web" / "backend" / "var" / "quota.json",
         kakao_rest_key=_env("KAKAO_REST_API_KEY"),
         vworld_key=_env("VWORLD_API_KEY"),
         transit_daily_limit=int(_env("KAKAO_TRANSIT_DAILY_LIMIT") or 1000),
