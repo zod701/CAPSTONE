@@ -1,7 +1,7 @@
 // 대중교통 경로·택시·매칭 진단: 지도 그리기 + 사이드바 카드/표.
 import { esc, safeColor } from "./api.js";
 
-const COLOR = { BUS: "#1E88E5", SUBWAY: "#8E24AA", WALKING: "#757575", OTHER: "#9E9E9E" };
+const COLOR = { BUS: "#1E88E5", SUBWAY: "#8E24AA", WALKING: "#757575", TAXI: "#FFC107", OTHER: "#9E9E9E" };
 // 버스 유형(카카오 vehicles[].type, 실측 · 노선 순서표 route_type) → 실제 차체 색. 서울: 간선 파랑 · 지선 초록 · 순환 노랑 · 공항 (서울 BIS 노선색),
 // 경기: G버스 표준 도색 (일반 초록 · 마을 노랑 · 좌석 파랑 · 직행좌석 빨강 · 시외일반 초록). 카카오는 경기 직행좌석을 "광역"·"직행" 둘 다로,
 // M버스를 "광역"으로 준다 → 둘 다 빨강. 서울 마을버스는 초록이지만 카카오 유형만으로는 경기와 구분되지 않아 경기 노랑
@@ -31,15 +31,16 @@ export function initRoutes(view) {
 }
 
 const num = (x) => Math.round(x).toLocaleString("ko-KR");
-const fmtMin = (s) => {
+// 시간·거리·요금 표기는 하이브리드 목록(hybrid.js)도 같은 것을 쓴다 — 한 화면에서 잣대가 달라 보이지 않게
+export const fmtMin = (s) => {
   if (s == null) return "–";
   const m = Math.round(s / 60);
   return m >= 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`;
 };
 const fmtKm = (m) => (m == null ? "–" : `${(m / 1000).toFixed(1)} km`);
 const fmtM = (d) => (d == null ? "–" : `${num(d)} m`);
-const fmtDist = (m) => (m == null ? "–" : m < 1000 ? `${num(m)} m` : fmtKm(m));
-const fmtWon = (w) => (w == null ? "–" : `${num(w)}원`);
+export const fmtDist = (m) => (m == null ? "–" : m < 1000 ? `${num(m)} m` : fmtKm(m));
+export const fmtWon = (w) => (w == null ? "–" : `${num(w)}원`);
 const pct = (r) => (r == null ? "–" : `${(r * 100).toFixed(1)}%`);
 const ll = (p) => [p[1], p[0]]; // [lon, lat] → Leaflet [lat, lon]
 
@@ -52,6 +53,25 @@ function routeLabel(route) {
   return parts.join("+") || route.type || "경로";
 }
 
+// 첫 승차 대기를 실시간 도착정보로 잡은 방식(서버 wait_source) — 셋 다 화면에는 초록 '실시간' 으로 나오고, 마우스를 올리면
+// 무엇으로 잡았는지 밝힌다. realtime = 탈 차의 도착 예측 초 · realtime_stops = 남은 정류장·역 수로 어림 ·
+// realtime+headway = 알려진 차를 걸어가는 동안 다 놓쳐 마지막 차 뒤로 배차간격을 이음
+const LIVE_WAIT = {
+  realtime: "실시간 도착 예측",
+  realtime_stops: "실시간 위치로 어림 — 도착 예측 초가 없어 탈 차의 남은 정류장·역 수로 도착 시간을 잡았습니다",
+  "realtime+headway": "실시간 + 배차 — 알려진 차는 정류장까지 걸어가는 동안 모두 떠나, 마지막 차 뒤로 배차간격을 이어 다음 차를 잡았습니다",
+};
+const isLiveWait = (source) => Object.hasOwn(LIVE_WAIT, source || "");
+
+// 실시간 대기 표시에 올리는 설명 — 방식 · 걸어가는 시간 · 배차로만 추정했을 때의 값
+function liveWaitTitle(s) {
+  const lines = [LIVE_WAIT[s.wait_source]];
+  if (s.walk_to_stop_s != null) lines.push(`정류장까지 걸어가는 ${fmtMin(s.walk_to_stop_s)}을 빼고 그 뒤 첫 차까지`);
+  if (s.wait_source === "realtime+headway" && s.headway_m != null) lines.push(`배차간격 ${Math.round(s.headway_m)}분`);
+  if (s.static_wait_s != null) lines.push(`배차로만 추정하면 약 ${fmtMin(s.static_wait_s)}`);
+  return lines.join("\n");
+}
+
 // 카카오 소요 시간에는 차를 기다리는 시간이 없다(실측) — 배차로 추정한 대기를 더한 값을 옆에 작게.
 // 한 구간이라도 배차를 모르면 서버가 합을 주지 않는다(total_with_wait_s = null) → 그 경로는 지금까지처럼 시간만 보인다
 function waitText(r) {
@@ -62,7 +82,9 @@ function waitText(r) {
   // 도시철도 배차는 평일 시각표(GTFS)에서 센 값이라 주말에도 평일 값이다 — 무엇을 근거로 삼았는지 밝힌다
   const basis = [day && rides.some((s) => s.type !== "SUBWAY") ? `버스 ${day} 배차` : "",
     rides.some((s) => s.type === "SUBWAY") ? "지하철 평일 시각표" : ""].filter(Boolean).join(" · ");
-  const why = `기다리는 시간 ${fmtMin(r.wait_s)}을 더한 값 — 구간 배차의 절반으로 추정`
+  const live = (r.steps || []).some((s) => isLiveWait(s.wait_source));
+  const why = `기다리는 시간 ${fmtMin(r.wait_s)}을 더한 값 — `
+    + (live ? "첫 승차는 실시간 도착정보, 나머지는 구간 배차의 절반으로 추정" : "구간 배차의 절반으로 추정")
     + (per ? `
 구간 배차: ${per}` : "") + (basis ? `
 기준: ${basis}` : "");
@@ -142,10 +164,11 @@ function stepChips(s) {
     .map((x) => chip(x.name, busColor(x.type))).join(" ");
 }
 
-function chips(route) {
+// 경로 칩 줄 — 하이브리드 카드도 같은 줄을 쓴다(택시 구간은 TAXI 한 칸)
+export function chips(route) {
   return (route.steps || [])
     .filter((s) => s.type !== "WALKING")
-    .map(stepChips)
+    .map((s) => (s.type === "TAXI" ? chip("택시", COLOR.TAXI) : stepChips(s)))
     .join('<span class="chip-sep">›</span>');
 }
 
@@ -158,8 +181,39 @@ const SORTS = [ // [값, 이름, 기준(경로, 번호)] — 기준이 없으면
   ["transfers", "최소 환승순", (r) => r.transfers],
   ["walk", "최소 도보순", (r, i) => cards.walk[i]],
 ];
-const GROUP_ORDER = ["버스", "지하철", "버스+지하철"];
-let cards = null; // 지금 대중교통 목록의 보기 상태 {el, transit, onSelect, walk, group, sort, expanded, selected}
+// 결과 목록의 보기 상태 {el, transit, onSelect, walk, group, sort, expanded, selected, extras}.
+// 대중교통 경로(키 "t:번호")와 하이브리드 경로(키 "h:번호", setExtraCards)를 한 목록에 그린다 — selected·expanded 는 그 키
+let cards = null;
+
+// 탭·정렬 버튼은 결과 머리(app.js)가 그린다 — 정렬 선택지와 종류별 경로 수만 내준다
+export const SORT_OPTIONS = SORTS.map(([k, label]) => [k, label]);
+export function routeGroupCounts(transit) {
+  const counts = new Map();
+  for (const r of transit?.routes || []) counts.set(routeLabel(r), (counts.get(routeLabel(r)) || 0) + 1);
+  return counts;
+}
+
+// 결과를 지울 때 목록 상태도 버린다 — 남겨 두면 다음 탭 전환이 지운 경로를 다시 그린다
+export function resetRouteCards() {
+  cards = null;
+}
+
+// 결과 머리의 탭(group: null = 전체 · "hybrid" · 대중교통 종류 이름)·정렬로 목록을 다시 그린다
+// → 보이는 대중교통 경로 번호(정렬 순서). 목록이 없으면 []
+export function setRouteView({ group, sort } = {}) {
+  if (!cards) return [];
+  if (group !== undefined) cards.group = group;
+  if (sort !== undefined) cards.sort = sort;
+  drawCards();
+  return visibleEntries().filter((e) => e.kind === "t").map((e) => e.i);
+}
+
+// 하이브리드 카드를 같은 목록에 넣는다 — items: [{html, route(펼칠 때의 타임라인), time_s, fare, onSelect}] (hybrid.js 가 만든다)
+export function setExtraCards(items) {
+  if (!cards) return;
+  cards.extras = items;
+  drawCards();
+}
 
 // 걷는 거리(m) = 카카오 도보 구간 거리 + 응답에 없는 첫·끝 도보의 직선거리(지도에 점선 직선으로 그리는 그 구간)
 function walkMeters(route, origin, dest) {
@@ -174,70 +228,74 @@ function walkMeters(route, origin, dest) {
 }
 
 const numOr = (x) => (typeof x === "number" && Number.isFinite(x) ? x : Infinity);
-const groupRank = (g) => (GROUP_ORDER.includes(g) ? GROUP_ORDER.indexOf(g) : GROUP_ORDER.length);
 
-// 경로 목록 + 탭 + 정렬을 그리고, 보이는 첫 경로를 고른다(onSelect). 카드의 data-i 는 transit.routes 의 원래 번호.
-// origin·dest(검색한 출발·도착)는 첫·끝 도보 거리 추정에 쓴다.
-export function renderRouteCards(el, transit, onSelect, { origin = null, dest = null } = {}) {
-  const counts = new Map();
-  for (const r of transit.routes) counts.set(routeLabel(r), (counts.get(routeLabel(r)) || 0) + 1);
-  const groups = [...counts.keys()].sort((a, b) => groupRank(a) - groupRank(b) || a.localeCompare(b, "ko"));
+// 경로 목록을 그리고, 보이는 첫 경로를 고른다(onSelect). 카드의 data-i 는 transit.routes 의 원래 번호.
+// group·sort 는 결과 머리의 탭·정렬(탭 전환은 setRouteView). origin·dest(검색한 출발·도착)는 첫·끝 도보 거리 추정에 쓴다.
+export function renderRouteCards(el, transit, onSelect, { origin = null, dest = null, group = null, sort = SORTS[0][0] } = {}) {
   cards = { el, transit, onSelect, walk: transit.routes.map((r) => walkMeters(r, origin, dest)),
-    group: null, sort: SORTS[0][0], expanded: null, selected: null };
-  const tab = (g, label, n) => `<button type="button" class="rt-tab" role="tab" aria-selected="${g === null}"`
-    + ` data-g="${esc(g ?? "")}">${esc(label)}<span class="rt-n">${n}</span></button>`;
-  el.innerHTML = `<div class="rt-tabs" role="tablist" aria-label="경로 종류">${tab(null, "전체", transit.routes.length)}`
-    + `${groups.map((g) => tab(g, g, counts.get(g))).join("")}</div>`
-    + `<label class="rt-sort">정렬 <select>${SORTS.map(([k, label]) => `<option value="${k}">${label}</option>`).join("")}</select></label>`
-    + '<div class="rt-list"></div>';
-  for (const b of el.querySelectorAll(".rt-tab")) {
-    b.addEventListener("click", () => {
-      cards.group = b.dataset.g || null;
-      for (const t of el.querySelectorAll(".rt-tab")) t.setAttribute("aria-selected", String(t === b));
-      drawCards();
-      const shown = visibleRoutes();
-      if (!shown.includes(cards.selected)) onSelect(shown[0]); // 지도의 경로가 이 탭에 없으면 탭의 첫 경로로
-    });
-  }
-  el.querySelector(".rt-sort select").addEventListener("change", (e) => {
-    cards.sort = e.target.value; // 정렬만 바꾸고 선택한 경로는 그대로
-    drawCards();
-  });
+    group, sort, expanded: null, selected: null, extras: [] };
+  el.innerHTML = '<div class="rt-list"></div>';
   drawCards();
-  onSelect(visibleRoutes()[0]);
+  const first = visibleEntries().find((e) => e.kind === "t");
+  if (first) onSelect(first.i);
 }
 
-// 지금 탭의 경로 번호를 정렬 순서대로
-function visibleRoutes() {
-  const { transit, group, sort } = cards;
-  const key = SORTS.find(([k]) => k === sort)[2];
-  return transit.routes.map((r, i) => [r, i])
-    .filter(([r]) => group === null || routeLabel(r) === group)
-    .sort(([a, i], [b, j]) => numOr(key(a, i)) - numOr(key(b, j)) || numOr(a.total_time_s) - numOr(b.total_time_s) || i - j)
-    .map(([, i]) => i);
+// 하이브리드 경로에 있는 정렬 기준 — 거리·환승·도보는 값이 없어 맨 뒤로 간다(기준이 없으면 맨 뒤)
+const EXTRA_SORT = { time: (x) => x.time_s, fare: (x) => x.fare };
+
+// 지금 탭의 경로를 정렬 순서대로 → [{kind "t"|"h", i, key}].
+// 전체 탭에서 하이브리드와 섞일 때 시간순은 대중교통도 **대기 포함 시간**(없으면 카카오 시간)으로 견준다 —
+// 하이브리드 시간에는 대기가 들어 있고 카카오 시간에는 없어(method.md E15) 그대로 섞으면 대중교통이 부당하게 앞선다.
+// 대중교통 종류 탭은 섞이지 않으니 카카오 시간 그대로다
+function visibleEntries() {
+  const { transit, group, sort, extras } = cards;
+  const mixed = group === null && extras.length > 0;
+  const tKey = mixed && sort === "time" ? (r) => r.total_with_wait_s ?? r.total_time_s : SORTS.find(([k]) => k === sort)[2];
+  const out = [];
+  if (group !== "hybrid") {
+    transit.routes.forEach((r, i) => {
+      if (group === null || routeLabel(r) === group) out.push({ kind: "t", i, key: `t:${i}`, v: tKey(r, i), tie: r.total_time_s });
+    });
+  }
+  if (group === null || group === "hybrid") {
+    extras.forEach((x, i) => out.push({ kind: "h", i, key: `h:${i}`, v: EXTRA_SORT[sort]?.(x), tie: x.time_s }));
+  }
+  return out.sort((a, b) => numOr(a.v) - numOr(b.v) || numOr(a.tie) - numOr(b.tie)
+    || (a.kind === b.kind ? a.i - b.i : a.kind === "t" ? -1 : 1));
 }
 
 function drawCards() {
-  const { el, transit, onSelect } = cards;
+  const { el, transit, extras } = cards;
   const list = el.querySelector(".rt-list");
-  const shown = visibleRoutes();
-  list.innerHTML = shown.map((i) => routeCardHTML(transit.routes[i], i)).join("");
+  const shown = visibleEntries();
+  list.innerHTML = shown.map((e) => (e.kind === "t" ? routeCardHTML(transit.routes[e.i], e.i) : extras[e.i].html)).join("");
   for (const card of list.querySelectorAll(".route-card")) {
-    const i = Number(card.dataset.i);
+    const key = card.dataset.key;
     card.querySelector(".rc-head").addEventListener("click", () => {
       const wasOpen = card.classList.contains("expanded");
-      if (!card.classList.contains("selected")) onSelect(i); // 지도에 그리기 (이미 선택된 카드면 다시 맞추지 않음)
-      expandCard(list, transit, wasOpen ? null : i);
+      if (!card.classList.contains("selected")) selectEntry(key); // 지도에 그리기 (이미 선택된 카드면 다시 맞추지 않음)
+      expandCard(wasOpen ? null : key);
     });
   }
-  markSelected(el, cards.selected);
-  if (shown.includes(cards.expanded)) expandCard(list, transit, cards.expanded);
+  paintSelected();
+  if (shown.some((e) => e.key === cards.expanded)) expandCard(cards.expanded);
   else cards.expanded = null;
+}
+
+const entryOf = (key) => {
+  const [kind, n] = key.split(":");
+  return { kind, i: Number(n) };
+};
+
+function selectEntry(key) {
+  const { kind, i } = entryOf(key);
+  if (kind === "t") cards.onSelect(i);
+  else cards.extras[i].onSelect();
 }
 
 function routeCardHTML(r, i) {
   return `
-    <div class="route-card" data-i="${i}">
+    <div class="route-card" data-i="${i}" data-key="t:${i}">
       <button type="button" class="rc-head" aria-expanded="false">
         <span class="rc-top"><b class="rc-type">${esc(routeLabel(r))}</b>
           <span class="rc-times"><b class="rc-time">${fmtMin(r.total_time_s)}</b>${waitText(r)}</span>${matchBadge(r.diag_summary)}</span>
@@ -248,21 +306,15 @@ function routeCardHTML(r, i) {
     </div>`;
 }
 
-// 카드 하나만 펼친다. 펼칠 때 처음 한 번만 구간 타임라인을 만든다.
-function expandCard(el, transit, idx) {
-  if (cards) cards.expanded = idx;
-  for (const card of el.querySelectorAll(".route-card")) {
-    const open = Number(card.dataset.i) === idx;
+// 카드 하나만 펼친다(key, 없으면 null). 펼칠 때 처음 한 번만 구간 타임라인을 만든다 — 하이브리드는 택시를 끼운 경로로.
+function expandCard(key) {
+  cards.expanded = key;
+  for (const card of cards.el.querySelectorAll(".route-card")) {
+    const open = card.dataset.key === key;
     const detail = card.querySelector(".rc-detail");
     if (open && !detail.childElementCount) {
-      detail.innerHTML = routeTimelineHTML(transit.routes[idx]);
-      for (const b of detail.querySelectorAll(".tl-toggle")) {
-        b.addEventListener("click", () => {
-          const strip = b.nextElementSibling;
-          strip.hidden = !strip.hidden;
-          b.setAttribute("aria-expanded", String(!strip.hidden));
-        });
-      }
+      const { kind, i } = entryOf(key);
+      fillTimeline(detail, kind === "t" ? cards.transit.routes[i] : cards.extras[i].route);
     }
     card.classList.toggle("expanded", open);
     card.querySelector(".rc-head").setAttribute("aria-expanded", String(open));
@@ -272,31 +324,56 @@ function expandCard(el, transit, idx) {
 
 // --- 구간 타임라인: 출발지 → (구간 · 정류장)… → 도착지, 세로로 ---
 
+// 펼친 카드의 구간 타임라인 — 승차 구간을 누르면 정류장·역 목록이 열린다 (하이브리드 카드도 같은 것을 쓴다)
+export function fillTimeline(detail, route) {
+  detail.innerHTML = routeTimelineHTML(route);
+  for (const b of detail.querySelectorAll(".tl-toggle")) {
+    b.addEventListener("click", () => {
+      const strip = b.nextElementSibling;
+      strip.hidden = !strip.hidden;
+      b.setAttribute("aria-expanded", String(!strip.hidden));
+    });
+  }
+}
+
+// 구간 타임라인. 하이브리드는 택시를 TAXI 구간 하나로 끼워 넣는다 — {time_s, distance_m, fare, counted_s, from_name, to_name}.
+// from_name·to_name 이 없으면 그 끝이 출발지·도착지다
 export function routeTimelineHTML(route) {
   const steps = route.steps || [];
   const items = [];
-  // wait = 그 지점에서 차를 기다리는 시간(배차의 절반 추정) — 타고 오르는 지점에만 붙는다
-  const node = (name, end = false, wait = null) => {
+  // wait = 그 지점에서 차를 기다리는 시간 — 타고 오르는 지점에만 붙는다. 보통은 배차의 절반 추정이고,
+  // liveTitle 이 있으면 실시간 도착정보로 잡은 값이다(첫 승차 — 정류장까지 걷는 동안 떠나는 차는 뺀 뒤 첫 차)
+  const node = (name, end = false, wait = null, liveTitle = null) => {
     const prev = items.at(-1);
     if (!end && prev?.kind === "node" && prev.name === name) { // 도보 없이 이어 탈 때 같은 역은 한 번만
-      if (wait != null) prev.wait = wait;
+      if (wait != null) Object.assign(prev, { wait, liveTitle });
       return;
     }
-    items.push({ kind: "node", name, end, wait });
+    items.push({ kind: "node", name, end, wait, liveTitle });
   };
+  const isRide = (s) => s?.type === "BUS" || s?.type === "SUBWAY";
+  // 카카오가 주지 않는 첫·끝 도보. 택시가 출발지에서 떠나거나 도착지에 닿으면 그 끝에는 도보가 없다
+  const edgeWalk = (s, end) => s && s.type !== "WALKING" && (s.type !== "TAXI" || s[end]);
   node("출발지", true);
-  if (steps.length && steps[0].type !== "WALKING") items.push({ kind: "missing" }); // 카카오가 주지 않는 첫 도보
-  for (const s of steps) {
+  if (edgeWalk(steps[0], "from_name")) items.push({ kind: "missing" });
+  for (const [k, s] of steps.entries()) {
     if (s.type === "WALKING") {
       items.push({ kind: "walk", s });
       continue;
     }
+    if (s.type === "TAXI") {
+      // 택시 양끝 이름은 이웃 구간이 이름을 주지 않을 때만 — 같은 정류장이 이름만 조금 달라 두 번 나오지 않게
+      if (s.from_name && items.at(-1)?.kind !== "node") node(s.from_name);
+      items.push({ kind: "taxi", s });
+      if (s.to_name && !isRide(steps[k + 1])) node(s.to_name);
+      continue;
+    }
     const stops = s.stops || [];
-    node(stops[0] ?? s.board_name ?? "?", false, s.wait_s ?? null);
+    node(stops[0] ?? s.board_name ?? "?", false, s.wait_s ?? null, isLiveWait(s.wait_source) ? liveWaitTitle(s) : null);
     items.push({ kind: "ride", s });
     node(stops.length >= 2 ? stops.at(-1) : s.alight_name ?? "?");
   }
-  if (steps.length && steps.at(-1).type !== "WALKING") items.push({ kind: "missing" }); // 마지막 도보
+  if (edgeWalk(steps.at(-1), "to_name")) items.push({ kind: "missing" });
   node("도착지", true);
   return `<ol class="tl">${items.map(timelineItem).join("")}</ol>`;
 }
@@ -306,6 +383,7 @@ const rail = (line = "") => `<span class="tl-rail">${line}</span>`;
 function timelineItem(it) {
   if (it.kind === "node") {
     const wait = it.wait == null ? ""
+      : it.liveTitle ? `<span class="tl-wait live" title="${esc(it.liveTitle)}">대기 ${fmtMin(it.wait)} · 실시간</span>`
       : `<span class="tl-wait" title="배차의 절반으로 추정한 기다리는 시간">대기 약 ${fmtMin(it.wait)}</span>`;
     return `<li class="tl-node${it.end ? " tl-end" : ""}">${rail('<span class="tl-dot"></span>')}`
       + `<span class="tl-name">${esc(it.name)}${wait}</span></li>`;   // 레일 오른쪽 칸은 하나다 — 이름 안에 붙인다
@@ -313,6 +391,15 @@ function timelineItem(it) {
   if (it.kind === "missing") {
     return `<li class="tl-seg tl-walk tl-missing">${rail('<span class="tl-line"></span>')}`
       + '<span class="tl-info"><span class="tl-meta">도보</span></span></li>';
+  }
+  if (it.kind === "taxi") {
+    const t = it.s;
+    // 택시 뒤에 차를 잡아야 하면 도착 추정에 여유를 둔다 — 그 여유까지 총 시간에 들어갔음을 밝힌다
+    const buffer = t.counted_s != null && t.counted_s - (t.time_s ?? 0) >= 30
+      ? ` · 연결 여유 포함 ${fmtMin(t.counted_s)}` : "";
+    return `<li class="tl-seg tl-ride tl-taxi">${rail(`<span class="tl-line" style="background:${COLOR.TAXI}"></span>`)}`
+      + `<div class="tl-info"><span class="tl-vehs">${chip("택시", COLOR.TAXI)}</span>`
+      + `<span class="tl-meta">${fmtMin(t.time_s)} · ${fmtDist(t.distance_m)} · 요금 ${fmtWon(t.fare)}${buffer}</span></div></li>`;
   }
   const s = it.s;
   if (it.kind === "walk") {
@@ -358,11 +445,20 @@ function stopStripHTML(stops, color) {
   return `<div class="strip-snake" style="--c:${color}">${rows.join("")}</div>`;
 }
 
+// 지도에 그린 경로 표시 — key "t:번호"(대중교통) · "h:번호"(하이브리드) · null. 탭·정렬로 다시 그려도 유지한다
+export function markSelectedKey(key) {
+  if (!cards) return;
+  cards.selected = key;
+  paintSelected();
+}
+
+// 대중교통 경로 번호로 (없으면 null)
 export function markSelected(el, idx) {
-  if (cards?.el === el) cards.selected = idx; // 탭·정렬로 다시 그려도 선택 표시를 유지
-  for (const b of el.querySelectorAll(".route-card")) {
-    b.classList.toggle("selected", Number(b.dataset.i) === idx);
-  }
+  markSelectedKey(idx == null ? null : `t:${idx}`);
+}
+
+function paintSelected() {
+  for (const b of cards.el.querySelectorAll(".route-card")) b.classList.toggle("selected", b.dataset.key === cards.selected);
 }
 
 // --- 지도: 대중교통 경로 ---
@@ -471,7 +567,7 @@ export function drawCar(car, { fit = false } = {}) {
   if (car?.path?.length >= 2) {
     const latlngs = car.path.map(ll);
     L.polyline(latlngs, { color: "#000000", weight: 7, opacity: 0.85, renderer, interactive: false }).addTo(g);
-    L.polyline(latlngs, { color: "#FFC107", weight: 4, opacity: 1, renderer, interactive: false }).addTo(g);
+    L.polyline(latlngs, { color: COLOR.TAXI, weight: 4, opacity: 1, renderer, interactive: false }).addTo(g);
     if (fit) v.map.fitBounds(extendWith(L.latLngBounds(latlngs), v.transitGroup), FIT);
   }
   syncAttribution();

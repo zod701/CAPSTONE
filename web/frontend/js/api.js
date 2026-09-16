@@ -11,8 +11,17 @@ export class ApiError extends Error {
   }
 }
 
+export function getJSON(path, params = {}, { signal } = {}) {
+  return request(path, params, { signal });
+}
+
+// 본문(JSON)을 실어 보낸다 — 하이브리드가 방금 받은 [경로 검색] 결과를 기준 경로로 돌려보낼 때
+export function postJSON(path, params = {}, body = {}, { signal } = {}) {
+  return request(path, params, { signal, body });
+}
+
 // 비-2xx → 서버의 {"error": {...}} 를 ApiError 로. AbortError 는 그대로 던진다(호출자가 무시).
-export async function getJSON(path, params = {}, { signal } = {}) {
+async function request(path, params, { signal, body: payload }) {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params || {})) {
     if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
@@ -21,7 +30,10 @@ export async function getJSON(path, params = {}, { signal } = {}) {
 
   let res;
   try {
-    res = await fetch(url, { signal, headers: { Accept: "application/json" } });
+    res = await fetch(url, payload === undefined
+      ? { signal, headers: { Accept: "application/json" } }
+      : { method: "POST", signal, headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify(payload) });
   } catch (err) {
     if (err.name === "AbortError") throw err;
     throw new ApiError("서버에 연결할 수 없습니다.", {

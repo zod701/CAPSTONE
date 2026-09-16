@@ -342,6 +342,23 @@ def test_subway_eta_rules(barvl, code, recptn, eta, age):
     assert item["n_stops_ahead"] == 20      # 예측이 없을 때 임박 여부를 가릴 유일한 값
 
 
+@pytest.mark.parametrize("code, msg, ahead", [
+    ("5", "전역 도착", 1),               # 1역 전 열차는 '[N]번째 전역' 문구 없이 도착 코드로만 온다(실측 수원·정자)
+    ("4", "전역 진입", 1),
+    ("3", "전역 출발", 1),
+    ("0", "수원 진입", None),            # 이 역의 상태다 — 남은 역이 아니다
+    ("1", "수원 도착", None),
+    ("2", "수원 출발", None),
+    ("99", "[3]번째 전역 (매탄권선)", 3),
+    ("99", "", None),
+])
+def test_subway_stops_ahead_from_arrival_code(code, msg, ahead):
+    """1역 전 열차를 버리면 5역 전 열차를 탈 차로 잡는다 — 수원 수인분당선 첫 대기가 배차 추정 7.5분에서 26분이 됐다."""
+    row = {"subwayId": "1075", "updnLine": "상행", "barvlDt": "0", "arvlCd": code,
+           "arvlMsg2": msg, "recptnDt": "2026-09-12 13:22:40"}
+    assert subway(subway_body([row]), NOW)[0]["n_stops_ahead"] == ahead
+
+
 def test_subway_station_name_is_path_segment(tmp_path):
     up = Upstream(200, subway_body([]))
     client, _ = make(tmp_path, up)

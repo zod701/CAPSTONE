@@ -161,8 +161,20 @@ def test_rail_counts_and_headway(tmp_path):
     df = rail_frame(counts, mapped)
     assert df["hour"].tolist() == [8, 9]
     assert df["n_trips"].tolist() == [3, 1]
-    assert df["headway_m"].tolist() == [20.0, 60.0]
+    assert df["n_trips_3h"].tolist() == [4, 4]
+    assert df["headway_m"].tolist() == [45.0, 45.0]              # 180 / 3시간 창의 정차 횟수
     assert df.iloc[0][["station_id", "name", "line_group", "direction"]].tolist() == ["s4-1", "불암산", "4호선", "하행"]
+
+
+def test_rail_frame_window_keeps_hourly_service_and_smooths_boundary():
+    mapped = {("S1", "4호선"): _station("s4-1", "불암산", "4호선", 37.6, 127.1),
+              ("S2", "4호선"): _station("s4-2", "당고개", "4호선", 37.6, 127.1)}
+    counts = {("S1", "4호선", "하행"): {10: 1, 11: 1, 12: 1},          # 실제로 한 시간에 한 대
+              ("S2", "4호선", "하행"): {10: 2, 11: 1, 12: 2}}          # 40분 간격이 시 경계에 걸려 2·1·2
+    df = rail_frame(counts, mapped).set_index(["station_id", "hour"])
+    assert df.loc[("s4-1", 11), "headway_m"] == 60.0
+    assert df.loc[("s4-1", 10), "headway_m"] == 90.0                  # 첫 시간대: 창이 운행 없는 9시를 품는다
+    assert df.loc[("s4-2", 11), "headway_m"] == 36.0                  # 한 칸만 세면 60분
 
 
 def test_rail_frame_keeps_after_midnight_hours(tmp_path):

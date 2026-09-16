@@ -8,9 +8,10 @@ import math
 from datetime import datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Body, Query, Request, Response
 from fastapi.responses import FileResponse
 
+from . import hybrid as hybrid_plan
 from . import places
 from .config import KST
 from .errors import ApiError
@@ -159,9 +160,13 @@ def _diagnose(db, routes_db, lines_db, routes, settings):
     return summarize(unique, unmapped_all)
 
 
-@router.get("/transit")
-async def transit(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat, probe: bool = False):
-    st = request.app.state
+async def transit_payload(st, sx, sy, ex, ey, probe=False, realtime=False):
+    """대중교통 경로 한 번 — 정규화 + 접지·대기까지 끝낸 응답. 하이브리드도 기준 경로를 이것으로 받는다.
+
+    `realtime` 이면 첫 승차 대기를 실시간 도착정보로 바꾼다(첫 승차 정류장·역마다 도착정보 1콜, 15초 캐시).
+    '출발지에서 걸어서 첫 정류장에 닿는다' 는 전제라 [경로 검색] 결과에만 켠다 — 하이브리드는 택시로 정류장에 닿는
+    A 에 원래 경로가 필요해 받은 뒤 스스로 바꾸고, 앵커에서 다시 부르는 경로에는 켜지 않는다.
+    """
     raw = await st.kakao.transit(sx, sy, ex, ey)
     norm = normalize_transit(raw)
     if probe:
@@ -180,9 +185,64 @@ async def transit(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lo
     # 카카오 시간에는 대기가 없다 — 배차표가 있으면 구간마다 기다릴 시간을 더한 값도 함께 준다
     norm["wait_basis"] = (add_wait(norm["routes"], st.headway, datetime.now(KST), st.routes)
                           if st.headway is not None else None)
+    norm["realtime"] = None   # 첫 승차 대기 진단 — realtime · realtime_stops · realtime+headway · no_arrivals … (안 썼으면 None)
+    if realtime and norm["routes"] and st.stops is not None and st.lines is not None:
+        try:
+            norm["routes"], norm["realtime"] = await hybrid_plan.realtime_first_waits(
+                st, realtime_items, (sx, sy), norm["routes"])
+        except ApiError:   # algo 패키지가 없으면 배차로 추정한 대기로 남는다
+            pass
+    return norm
+
+
+@router.get("/transit")
+async def transit(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat, probe: bool = False):
+    st = request.app.state
+    norm = await transit_payload(st, sx, sy, ex, ey, probe, realtime=True)
     norm["quota"] = st.quota.snapshot()
     response.headers["Cache-Control"] = "no-store"
     return norm
+
+
+HybridTop = Annotated[int, Query(ge=1, le=hybrid_plan.MAX_TOP)]
+HybridTmax = Annotated[int, Query(ge=3, le=40)]
+
+
+@router.get("/hybrid")
+async def hybrid(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat,
+                 top: HybridTop = 5, t_max: HybridTmax = 15):
+    """택시 ↔ 대중교통 연계 경로. 앵커마다 카카오를 부르므로 화면의 버튼을 눌렀을 때만 돈다. 기준 경로도 새로 부른다."""
+    return await _hybrid(request, response, (sx, sy), (ex, ey), top, t_max, None)
+
+
+@router.post("/hybrid")
+async def hybrid_reuse(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat,
+                       body: Annotated[dict, Body()], top: HybridTop = 5, t_max: HybridTmax = 15):
+    """같은 출발·도착의 [경로 검색] 결과(화면이 들고 있는 routes)를 본문으로 받아 기준 경로로 다시 쓴다 — 대중교통 1콜을 아낀다.
+
+    카카오 응답을 서버에 두지 않는 규칙은 그대로다: 본문은 이 요청을 처리하는 동안에만 쓰고 버린다(web/README.md §6).
+    화면은 결과를 받은 지 5분 안이고 출발·도착이 그대로일 때만 보낸다(app.js). 첫 승차 대기는 이 요청 시각의 실시간으로 다시 매긴다.
+    본문은 브라우저가 보낸 것이라 믿지 않는다 — 모양이 맞지 않으면 400.
+    """
+    routes = body.get("routes") if isinstance(body, dict) else None
+    if not (isinstance(routes, list) and routes
+            and all(isinstance(r, dict) and isinstance(r.get("steps"), list) for r in routes)):
+        raise ApiError("invalid_request", "기준으로 쓸 대중교통 경로가 올바르지 않습니다.",
+                       action="[경로 검색]을 다시 한 뒤 찾으세요.", status=400)
+    try:
+        return await _hybrid(request, response, (sx, sy), (ex, ey), top, t_max, routes)
+    except (KeyError, TypeError, AttributeError, ValueError) as err:   # 모양은 맞는데 속 항목이 빠진 본문
+        raise ApiError("invalid_request", "기준으로 쓸 대중교통 경로가 올바르지 않습니다.",
+                       action="[경로 검색]을 다시 한 뒤 찾으세요.", status=400) from err
+
+
+async def _hybrid(request, response, o, d, top, t_max, base_routes):
+    st = request.app.state
+    out = await hybrid_plan.plan(st, transit_payload, o, d, arrivals=realtime_items, base_routes=base_routes,
+                                 top=top, t_max_s=t_max * 60)
+    out["quota"] = st.quota.snapshot()
+    response.headers["Cache-Control"] = "no-store"
+    return out
 
 
 @router.get("/car")
@@ -223,8 +283,8 @@ async def search(request: Request, response: Response, q: str = ""):
     return {"items": items, "failed": failed, "quota": st.quota.snapshot()}
 
 
-def _live_db(request):
-    db = request.app.state.live_stations
+def _live_db(st):
+    db = st.live_stations
     if db is None:
         raise ApiError("data_not_built", "도시철도 실시간 역 매핑표가 없습니다.",
                        action="data 파이프라인의 build_subway_live_map.py 를 실행하세요 (data/README.md).", status=503)
@@ -249,11 +309,8 @@ def _eta_order(item):
             item["n_stops_ahead"] if item["n_stops_ahead"] is not None else FAR)
 
 
-@router.get("/arrivals/stop/{stop_key}")
-async def arrivals_stop(request: Request, stop_key: str):
-    """버스 정류장 실시간 도착. 그 정류장을 등록한 BIS 전부를 동시에 부르고 합친다
-    (한쪽만 실패하면 다른 쪽 결과 + failed — /api/search 와 같다)."""
-    st = request.app.state
+async def arrivals_stop_payload(st, stop_key):
+    """버스 정류장 실시간 도착 → {stop, name, items, failed}. 하이브리드도 첫 승차 대기를 이것으로 받는다."""
     if st.stops is None:
         raise _not_built()
     row = st.stops.by_id("bus", stop_key)
@@ -288,8 +345,33 @@ async def arrivals_stop(request: Request, stop_key: str):
                 it["route_type"] = types.get(it["route_id"])   # 순서표의 카카오 유형 이름 (프론트 BUS_COLOR 키)
             items.append(it)
     items.sort(key=_eta_order)
-    return {"stop": stop_key, "name": row["name"], "items": items, "failed": failed,
-            "quota": st.quota.snapshot()}
+    return {"stop": stop_key, "name": row["name"], "items": items, "failed": failed}
+
+
+@router.get("/arrivals/stop/{stop_key}")
+async def arrivals_stop(request: Request, stop_key: str):
+    """버스 정류장 실시간 도착. 그 정류장을 등록한 BIS 전부를 동시에 부르고 합친다
+    (한쪽만 실패하면 다른 쪽 결과 + failed — /api/search 와 같다)."""
+    st = request.app.state
+    out = await arrivals_stop_payload(st, stop_key)
+    out["quota"] = st.quota.snapshot()
+    return out
+
+
+async def arrivals_station_payload(st, station_id):
+    """도시철도 역 실시간 도착 → {station, name, line_group, items, failed}. 하이브리드도 이것으로 받는다."""
+    if st.stops is None:
+        raise _not_built()
+    row = st.stops.by_id("subway", station_id)
+    if row is None:
+        raise ApiError("not_found", "역을 찾을 수 없습니다.", status=404)
+    live = _live_db(st).live_for(station_id)
+    if live is None:
+        raise _no_realtime("이 역은 실시간 도착 정보를 제공하지 않습니다.")
+    items = await st.realtime.subway_station(*live)   # (실시간 역명, subwayId)
+    items.sort(key=_eta_order)
+    return {"station": station_id, "name": row["name"], "line_group": row["line_group"],
+            "items": items, "failed": []}
 
 
 @router.get("/arrivals/station/{station_id}")
@@ -300,18 +382,15 @@ async def arrivals_station(request: Request, station_id: str):
     (프론트가 두 도착정보 엔드포인트를 같은 코드로 다루게).
     """
     st = request.app.state
-    if st.stops is None:
-        raise _not_built()
-    row = st.stops.by_id("subway", station_id)
-    if row is None:
-        raise ApiError("not_found", "역을 찾을 수 없습니다.", status=404)
-    live = _live_db(request).live_for(station_id)
-    if live is None:
-        raise _no_realtime("이 역은 실시간 도착 정보를 제공하지 않습니다.")
-    items = await st.realtime.subway_station(*live)   # (실시간 역명, subwayId)
-    items.sort(key=_eta_order)
-    return {"station": station_id, "name": row["name"], "line_group": row["line_group"],
-            "items": items, "failed": [], "quota": st.quota.snapshot()}
+    out = await arrivals_station_payload(st, station_id)
+    out["quota"] = st.quota.snapshot()
+    return out
+
+
+async def realtime_items(st, kind, stop_id):
+    """첫 승차 지점 하나의 실시간 도착 — 정류장이면 BIS, 역이면 도시철도 원천 (하이브리드가 넘겨받는다)."""
+    payload = arrivals_station_payload if kind == "subway" else arrivals_stop_payload
+    return await payload(st, stop_id)
 
 
 @router.get("/quota")

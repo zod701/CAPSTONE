@@ -36,6 +36,7 @@ log = logging.getLogger(__name__)                     # 건수만 남긴다 (원
 
 # 도시철도 arvlCd — 0 진입 · 1 도착 · 2 출발 · 3 전역출발 · 4 전역진입 · 5 전역도착 · 99 운행중
 ARVL_NOW = ("0", "1")    # 지금 이 역에 들어오는 중·도착 = 기다릴 시간이 0
+ARVL_PREV = ("3", "4", "5")   # 전역 출발·진입·도착 = 1역 전. 원천이 '[N]번째 전역' 문구를 달지 않는다(실측)
 _STOPS_AHEAD = re.compile(r"\[(\d+)번째 전\]")
 _STOPS_AHEAD_RAIL = re.compile(r"\[(\d+)\]번째 전역")   # 도시철도는 괄호 위치가 다르다 ('[4]번째 전역 (덕정)')
 # 게이트웨이 거절은 format=json 이어도 XML 로 온다 — 숫자 코드만 꺼낸다(본문은 키를 에코할 수 있다)
@@ -216,6 +217,14 @@ def bus_seoul(raw: dict) -> list[dict]:
     return items
 
 
+def _rail_stops_ahead(ahead, code):
+    """도시철도 남은 역 수 — '[N]번째 전역' 문구, 없으면 도착 코드. 전역 출발·진입·도착은 1, 그 밖은 None
+    (이 역 진입·도착·출발은 남은 역이 아니라 상태다 — 진입·도착은 `eta_s` 0 이 이미 말한다)."""
+    if ahead:
+        return int(ahead.group(1))
+    return 1 if _text(code) in ARVL_PREV else None
+
+
 def subway(raw: dict, now=None) -> list[dict]:
     """서울 도시철도 실시간 도착 응답 → items (역 전체). 환승역은 한 응답에 여러 노선이 섞여 오므로
     노선 필터는 호출자가 line_id 로 한다 — 그래야 역 하나를 한 번만 부르고 걸러 쓴다.
@@ -254,8 +263,9 @@ def subway(raw: dict, now=None) -> list[dict]:
             "direction": _text(row.get("updnLine")) or None,    # '내선'·'외선' 도 원문 그대로
             "eta_s": eta,
             "age_s": age,                        # 이 값을 받은 뒤 지난 초 — 오래된 행을 버리는 판단에 쓴다
-            # barvlDt 가 '0' 으로만 오는 역이 많다 — 남은 역 수라도 있어야 임박한 열차를 가릴 수 있다
-            "n_stops_ahead": int(ahead.group(1)) if ahead else None,
+            # barvlDt 가 '0' 으로만 오는 역이 많다 — 남은 역 수라도 있어야 임박한 열차를 가릴 수 있다.
+            # 1역 전 열차는 문구 없이 도착 코드로만 온다 — 빼면 가장 가까운 열차가 늘 버려진다
+            "n_stops_ahead": _rail_stops_ahead(ahead, row.get("arvlCd")),
             "message": msg or None,
             "train_type": _text(row.get("btrainSttus")) or None,
             "dest": _text(row.get("bstatnNm")) or None,

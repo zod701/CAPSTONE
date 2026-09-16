@@ -1,14 +1,18 @@
 // 상태·흐름: 주소·장소 검색 또는 지도·정류장 클릭 → 출발/도착, [경로 검색] → 대중교통·택시 동시 요청, 오류 배너, 쿼터.
 // 카카오 응답은 이 페이지의 메모리(state)에만 둔다 — localStorage/sessionStorage 에 두지 않는다(저장소엔 화면 테마 설정만).
-import { getJSON, esc } from "./api.js";
+import { getJSON, postJSON, esc } from "./api.js";
 import { createMap } from "./map.js";
 import * as R from "./routes.js";
+import { renderHybrid } from "./hybrid.js";
 import { createPlaceSearch } from "./search.js";
 import { initStopRoutes, stopRoutesSection } from "./stoproutes.js";
+import { initTooltips } from "./tooltip.js";
 
 const $ = (id) => document.getElementById(id);
 const CONSOLE_URL = "https://developers.kakao.com/console/app";
 const OD_LABEL = { origin: "출발", dest: "도착" };
+// 하이브리드가 [경로 검색] 결과를 기준 경로로 다시 쓰는 시간 한도 — 넘으면 새로 부른다(카카오: 저장하지 않고 실시간 호출로만)
+const REUSE_MS = 5 * 60 * 1000;
 
 const state = {
   origin: null,
@@ -19,7 +23,14 @@ const state = {
   selectedIdx: null,
   car: null,
   carOn: false, // 택시 경로를 지도에 그렸는지 (택시 카드로 켜고 끈다)
+  hybrid: null,
+  hybridIdx: null, // 지도에 그린 하이브리드 경로 번호 (대중교통·택시 선택과 배타적이다)
   busy: false,
+  hybridBusy: false,
+  picked: null, // 검색해서 고른 장소 {latlng, name} — 검색창 옆 [출발][도착]이 쓴다
+  tab: "all",   // 결과 탭: all · 버스 · 지하철 · 버스+지하철 · hybrid
+  sort: "time",
+  transitAt: 0, // [경로 검색] 결과를 받은 시각 (하이브리드가 다시 쓸 수 있는지)
 };
 let seq = 0; // 좌표가 바뀔 때마다 증가 — 늦게 도착한 이전 검색 결과는 버린다
 const banners = new Map();
@@ -115,35 +126,77 @@ function setPoint(role, latlng, label = null) {
   }
 }
 
-// 검색 결과를 고르면: 지도를 그 자리로 옮기고 지도를 누른 것처럼 [출발] [도착] 메뉴(이름 달고).
-// 키보드로 골랐어도 이어서 정하게 [출발]에 포커스. 정하고 나서 다른 쪽이 비었으면 검색창으로 돌아와 이어서 찾는다
+// 검색 결과를 고르면: 검색창 옆 [출발][도착]이 풀려 그 자리에서 곧바로 정한다(키보드로 골랐어도 [출발]에 포커스).
+// 어디인지 보이게 지도도 그 자리로 옮기고 지도를 누른 것처럼 메뉴를 연다 — 지도에서 골라도 된다.
+// 정하고 나서 다른 쪽이 비었으면 검색창으로 돌아와 이어서 찾는다
 function pickPlace(item) {
   const ll = L.latLng(item.lat, item.lon);
   view.map.setView(ll, Math.max(view.map.getZoom(), 16));
-  const btns = openOdMenu(ll, { name: item.name }).querySelectorAll("[data-role]");
-  btns[0].focus({ preventScroll: true });
-  for (const b of btns) {
-    b.addEventListener("click", () => {
-      if (!state.origin || !state.dest) placeSearch.focus();
-    });
+  state.picked = { latlng: ll, name: item.name };
+  syncPickButtons();
+  for (const b of openOdMenu(ll, { name: item.name }).querySelectorAll("[data-role]")) {
+    b.addEventListener("click", afterPick);
   }
+  $("pick-origin").focus({ preventScroll: true });
 }
+
+function syncPickButtons() {
+  for (const role of ["origin", "dest"]) $(`pick-${role}`).disabled = !state.picked;
+}
+
+// 고른 장소를 정한 뒤 — 검색창을 비우고, 다른 쪽이 비었으면 이어서 찾게 검색창으로
+function afterPick() {
+  state.picked = null;
+  $("place-q").value = "";
+  syncPickButtons();
+  if (!state.origin || !state.dest) placeSearch.focus();
+}
+
+for (const role of ["origin", "dest"]) {
+  $(`pick-${role}`).addEventListener("click", () => {
+    const p = state.picked;
+    if (!p) return;
+    view.map.closePopup();
+    setPoint(role, p.latlng, p.name);
+    invalidate();
+    afterPick();
+  });
+}
+// 검색어를 고치면 고른 장소는 더 이상 검색창의 것이 아니다
+$("place-q").addEventListener("input", () => {
+  if (!state.picked) return;
+  state.picked = null;
+  syncPickButtons();
+});
 
 function update() {
   const btn = $("btn-search");
   btn.disabled = state.busy || !(state.origin && state.dest);
   btn.textContent = state.busy ? "경로 검색 중…" : "경로 검색";
+  const hy = $("btn-hybrid");
+  // 한 번 찾으면 출발·도착이 바뀔 때까지 잠근다 — 같은 조건으로 다시 찾으면 쿼터만 쓴다(실패했으면 다시 시도할 수 있게 둔다)
+  hy.disabled = state.busy || state.hybridBusy || !!state.hybrid || !(state.origin && state.dest);
+  hy.textContent = state.hybridBusy ? "앵커 확인 중…"
+    : state.hybrid ? `하이브리드 경로 찾음 (${state.hybrid.routes.length}개)` : "하이브리드 경로 찾기";
 }
 
-function clearResults() {
+// keepHybrid — 같은 출발·도착으로 다시 검색할 때 찾은 하이브리드는 남긴다(버튼도 잠근 채)
+function clearResults({ keepHybrid = false } = {}) {
   state.transit = null;
   state.selectedIdx = null;
   state.car = null;
   state.carOn = false;
+  if (!keepHybrid) state.hybrid = null;
+  state.hybridIdx = null;
+  state.tab = "all";
   R.clearTransit();
   R.clearCar();
+  R.resetRouteCards();
+  $("car-body").replaceChildren();
+  $("route-bar").hidden = true;
+  $("hybrid").hidden = true;
   setMsg("transit-body", "출발지와 도착지를 지정한 뒤 [경로 검색]을 누르세요.");
-  setMsg("car-body", "출발지와 도착지를 지정한 뒤 [경로 검색]을 누르세요.");
+  if (!keepHybrid) setMsg("hybrid-body", "[하이브리드 경로 찾기]를 누르면 택시로 갈아탈 지점을 찾습니다.");
   R.renderDiagnostics($("diag-body"), null, null);
   renderProbe(null);
 }
@@ -243,13 +296,18 @@ for (const role of ["origin", "dest"]) {
 }
 
 $("btn-search").addEventListener("click", search);
+$("btn-hybrid").addEventListener("click", runHybrid);
+
+function drawHybrid() {
+  renderHybrid($("hybrid-body"), state.hybrid, selectHybrid);
+}
 
 // --- 검색 ---
 
 async function search() {
   if (state.busy || !state.origin || !state.dest) return;
   const my = ++seq;
-  clearResults();
+  clearResults({ keepHybrid: true }); // 출발·도착이 그대로라 찾은 하이브리드는 유효하다
   state.busy = true;
   update();
   setMsg("transit-body", "조회 중…");
@@ -265,10 +323,62 @@ async function search() {
   if (my === seq) {
     state.busy = false;
     update();
-    showTransit(t);
     showCar(c);
+    showTransit(t);
+    if (state.hybrid) drawHybrid(); // 목록에 다시 섞는다
+    showResultsBar();
   }
   refreshQuota();
+}
+
+// --- 결과 머리: 택시 카드 아래의 탭(전체 · [버스 · 지하철 · 버스+지하철] · 하이브리드)과 정렬 ---
+// 전체 = 대중교통과 하이브리드를 한 목록에 섞는다(시간순이면 대기 포함 시간으로 견준다 — routes.js visibleEntries).
+// 하이브리드 영역(버튼 · 기준선 요약)은 전체 · 하이브리드 탭에서 목록 위에 보인다
+const TRANSIT_TABS = ["버스", "지하철", "버스+지하철"];
+
+function showResultsBar() {
+  const sel = $("route-sort");
+  if (!sel.options.length) {
+    sel.innerHTML = R.SORT_OPTIONS.map(([k, label]) => `<option value="${k}">${esc(label)}</option>`).join("");
+    sel.addEventListener("change", () => {
+      state.sort = sel.value; // 정렬만 바꾸고 선택한 경로는 그대로
+      R.setRouteView({ sort: state.sort });
+    });
+  }
+  sel.value = state.sort;
+  $("route-bar").hidden = false;
+  applyTab();
+}
+
+function tabCounts() {
+  const groups = R.routeGroupCounts(state.transit);
+  const transitN = state.transit?.routes?.length || 0;
+  const hybridN = state.hybrid?.routes?.length; // 아직 찾지 않았으면 비워 둔다
+  return { all: transitN + (hybridN || 0), hybrid: hybridN,
+    ...Object.fromEntries(TRANSIT_TABS.map((g) => [g, groups.get(g) || 0])) };
+}
+
+function applyTab() {
+  const n = tabCounts();
+  for (const b of document.querySelectorAll("#route-bar .rt-tab")) {
+    const t = b.dataset.tab;
+    b.setAttribute("aria-selected", String(t === state.tab));
+    b.querySelector(".rt-n").textContent = n[t] ?? "";
+    b.disabled = TRANSIT_TABS.includes(t) && !n[t]; // 그 종류의 경로가 없으면 잠근다
+  }
+  $("hybrid").hidden = !(state.tab === "hybrid" || state.tab === "all");
+  const shown = R.setRouteView({ group: state.tab === "all" ? null : state.tab });
+  if (state.tab === "hybrid") return; // 하이브리드 탭은 카드를 누르기 전까지 지도를 바꾸지 않는다
+  // 지도의 경로가 이 탭에 없으면 탭의 첫 경로로 — 전체 탭에서는 고른 하이브리드를 그대로 둔다
+  const keepHybrid = state.tab === "all" && state.hybridIdx != null;
+  if (!keepHybrid && shown.length && !shown.includes(state.selectedIdx)) selectRoute(shown[0]);
+}
+
+for (const b of document.querySelectorAll("#route-bar .rt-tab")) {
+  b.addEventListener("click", () => {
+    state.tab = b.dataset.tab;
+    applyTab();
+  });
 }
 
 function showTransit(res) {
@@ -278,6 +388,7 @@ function showTransit(res) {
     return;
   }
   const t = (state.transit = res.value);
+  state.transitAt = Date.now();
   if (t.quota) renderQuota(t.quota);
   renderProbe(t.probe);
   if (!t.routes?.length) {
@@ -285,8 +396,9 @@ function showTransit(res) {
     R.renderDiagnostics($("diag-body"), t, null);
     return;
   }
-  // 탭·정렬 기본값(전체 · 최소 시간순)의 첫 경로를 고른다. 출발·도착은 첫·끝 도보 거리 추정용
-  R.renderRouteCards(body, t, selectRoute, { origin: state.origin, dest: state.dest });
+  // 결과 머리의 탭·정렬로 그리고 보이는 첫 경로를 고른다. 출발·도착은 첫·끝 도보 거리 추정용
+  R.renderRouteCards(body, t, selectRoute, { origin: state.origin, dest: state.dest,
+    group: state.tab === "all" ? null : state.tab, sort: state.sort });
 }
 
 function selectRoute(i) {
@@ -294,10 +406,70 @@ function selectRoute(i) {
   const route = t?.routes?.[i];
   if (!route) return;
   state.selectedIdx = i;
+  dropHybrid(); // 하이브리드는 지도의 두 층(대중교통·택시)을 함께 쓴다 — 한 번에 하나만 그린다
   R.markSelected($("transit-body"), i);
   R.drawRoute(route, state.origin, state.dest);
   R.drawDiagnostics(route);
   R.renderDiagnostics($("diag-body"), t, route);
+}
+
+// --- 대중교통+택시 (하이브리드) ---
+
+// 버튼을 눌렀을 때만 부른다 — 서버가 앵커마다 카카오를 부르므로 쿼터를 크게 쓴다
+async function runHybrid() {
+  if (state.busy || state.hybridBusy || state.hybrid || !state.origin || !state.dest) return;
+  const my = seq;
+  state.hybridBusy = true;
+  update();
+  setMsg("hybrid-body", "택시로 갈아탈 지점을 찾고 확인하는 중…");
+  const o = state.origin;
+  const d = state.dest;
+  const params = { sx: o.lng.toFixed(6), sy: o.lat.toFixed(6), ex: d.lng.toFixed(6), ey: d.lat.toFixed(6) };
+  // [경로 검색] 결과를 받은 지 REUSE_MS 안이면 기준 경로로 돌려보내 다시 쓴다 — 서버는 이 요청을 처리하는 동안에만 쓴다
+  // (대중교통 1콜 절약). 출발·도착이 바뀌면 결과가 지워지므로 여기 남은 것은 늘 같은 출발·도착의 결과다
+  const reuse = state.transit?.routes?.length > 0 && Date.now() - state.transitAt < REUSE_MS;
+  try {
+    const data = reuse
+      ? await postJSON("/api/hybrid", params, { routes: state.transit.routes })
+      : await getJSON("/api/hybrid", params);
+    if (my !== seq) return; // 그사이 출발·도착이 바뀌었다
+    state.hybrid = data;
+    if (data.quota) renderQuota(data.quota);
+    drawHybrid();
+    applyTab(); // 탭 옆 경로 수에 하이브리드를 더한다
+  } catch (err) {
+    if (my === seq) $("hybrid-body").replaceChildren(errorBox(err));
+  } finally {
+    state.hybridBusy = false;
+    update();
+    refreshQuota();
+  }
+}
+
+// 앵커를 사이에 두고 택시 구간과 대중교통 구간을 함께 그린다.
+// A 는 앵커 → 도착지가 대중교통이고, B 는 출발지 → 앵커가 대중교통이다(나머지 끝이 택시).
+// D 는 출발지 → 도착지 기준 경로에서 택시가 대신한 한 구간만 빠진 경로다 — 빈 자리를 택시 선이 메운다
+function selectHybrid(i) {
+  const r = state.hybrid?.routes?.[i];
+  if (!r) return;
+  state.hybridIdx = i;
+  state.selectedIdx = null;
+  state.carOn = false;
+  R.markSelectedKey(`h:${i}`);
+  R.markCarSelected($("car-body"), false);
+  R.clearTransit();
+  const at = L.latLng(r.anchor.lat, r.anchor.lon);
+  const [from, to] = r.hybrid === "A" ? [at, state.dest] : r.hybrid === "B" ? [state.origin, at] : [state.origin, state.dest];
+  if (r.transit) R.drawRoute(r.transit, from, to);
+  R.drawCar(r.taxi, { fit: true });
+}
+
+// 대중교통·택시를 고르면 하이브리드 표시를 거둔다 (지도에 한 경로만 남게)
+function dropHybrid() {
+  if (state.hybridIdx == null) return;
+  state.hybridIdx = null;
+  R.markSelectedKey(state.selectedIdx == null ? null : `t:${state.selectedIdx}`);
+  R.clearCar();
 }
 
 function showCar(res) {
@@ -313,6 +485,7 @@ function showCar(res) {
 
 // 택시 경로 켜기/끄기 — 대중교통 경로 선택과 따로라 둘 다 켤 수 있다
 function toggleCar() {
+  dropHybrid();
   state.carOn = !state.carOn;
   R.markCarSelected($("car-body"), state.carOn);
   if (state.carOn) R.drawCar(state.car, { fit: true });
@@ -419,6 +592,7 @@ async function init() {
   clearResults();
   update();
   showThemeButton(document.documentElement.dataset.theme === "dark");
+  initTooltips(); // 모든 title 을 테마에 맞춘 말풍선으로
   const info = $("info-dialog"); // 데이터 출처·API 표 (제목 옆 ⓘ). 닫기는 × · Esc · 바깥 클릭
   $("info-btn").addEventListener("click", () => info.showModal());
   info.addEventListener("click", (e) => { if (e.target === info) info.close(); });

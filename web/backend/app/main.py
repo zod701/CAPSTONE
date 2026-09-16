@@ -12,8 +12,9 @@ from fastapi.staticfiles import StaticFiles
 
 from . import api, tiles
 from .config import Settings, load_settings
-from .errors import install_handlers
+from .errors import ApiError, install_handlers
 from .headwaydb import HeadwayDB
+from .hybrid import AnchorTables
 from .kakao import KakaoClient
 from .linesdb import LinesDB
 from .livestationsdb import LiveStationsDB
@@ -66,6 +67,10 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
             st.headway = HeadwayDB.load(settings.processed_dir)
         except FileNotFoundError:
             st.headway = None   # 대기시간을 더한 소요 시간만 빠진다
+        try:
+            st.anchor_tables = AnchorTables.load(settings.processed_dir)
+        except (FileNotFoundError, ApiError):
+            st.anchor_tables = None   # 하이브리드 경로만 빠진다 (algo 패키지나 표가 없다)
         try:
             st.live_stations = LiveStationsDB.load(settings.processed_dir)
         except FileNotFoundError:

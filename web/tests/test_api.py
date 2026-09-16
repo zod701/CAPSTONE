@@ -388,8 +388,10 @@ BUS_380 = {"properties": {"type": "BUS", "totalTime": 780, "totalDistance": 4200
 
 
 def test_transit_wait_from_headway(tmp_path, up):
-    """카카오 시간에는 대기가 없다 — 배차(380 은 10~20분, 중간 15분)의 절반을 더한 값도 함께 준다."""
+    """카카오 시간에는 대기가 없다 — 배차(380 은 10~20분, 중간 15분)의 절반을 더한 값도 함께 준다.
+    도착정보가 비면(원천 resultCode 4) 첫 승차도 배차 추정으로 남는다."""
     up.routes["dapi.kakao.com"] = lambda req: httpx.Response(200, json={**TRANSIT, "routes": [BUS_380]})
+    up.routes["apis.data.go.kr"] = lambda req: httpx.Response(200, json=GG_EMPTY)
     with serve(make_settings(tmp_path), up) as c:
         body = c.get("/api/transit", params=OD).json()
     assert body["wait_basis"]["day_type"] in ("평일", "토요일", "일요일")
@@ -398,6 +400,47 @@ def test_transit_wait_from_headway(tmp_path, up):
     assert step["route_ids"] == ["204000901"]
     assert (step["headway_m"], step["wait_s"]) == (15.0, 450)
     assert (r["wait_s"], r["total_with_wait_s"]) == (450, 1230)
+
+
+GG_EMPTY = {"_note": NOTE_PUBLIC, "response": {"msgHeader": {"resultCode": 4, "resultMessage": "결과가 존재하지 않습니다."}}}
+
+
+def test_transit_first_wait_uses_realtime(tmp_path, up):
+    """[경로 검색] 결과의 첫 승차 대기는 실시간 도착정보로 — 정류장까지 걸어가는 시간을 빼고 그 뒤 첫 차까지.
+    380 은 모의 경기 도착정보에서 3분 뒤(예측 초)라 출처가 realtime 이다."""
+    from algo import anchors
+    from geoutil import haversine_m
+    up.routes["dapi.kakao.com"] = lambda req: httpx.Response(200, json={**TRANSIT, "routes": [BUS_380]})
+    near = {**OD, "sx": 127.1190, "sy": 37.3822}   # 분당구청 정류장 코앞에서 출발
+    with serve(make_settings(tmp_path), up) as c:
+        body = c.get("/api/transit", params=near).json()
+    route = body["routes"][0]
+    step = route["steps"][0]
+    board = step["resolution"]["board"]["chosen"]
+    walk = anchors.walk_s(haversine_m(near["sx"], near["sy"], board["lon"], board["lat"]))
+    assert (step["wait_source"], step["static_wait_s"], step["walk_to_stop_s"]) == ("realtime", 450, round(walk))
+    assert step["wait_s"] == round(180 - walk)
+    assert (route["wait_s"], route["total_with_wait_s"]) == (step["wait_s"], 780 + step["wait_s"])
+    assert body["realtime"]["realtime"] == 1
+
+
+def test_transit_realtime_gets_subway_upstream_times(tmp_path, up, monkeypatch):
+    """남은 역 수로 도착을 어림할 때 쓰는 '열차가 지나올 역 사이 누적 시간' 을 방면과 같은 (승차역, 하차역) 키로 넘긴다.
+    합성 경로의 첫 승차는 수인분당선 수원 → 정자 — 순서표로 읽을 수 있는 구간이다."""
+    from algo import anchors
+    seen = {}
+    real = anchors.with_realtime_first_wait
+
+    def spy(routes, o, arrivals, toward=None, upstream=None):
+        seen.update(toward=toward, upstream=upstream)
+        return real(routes, o, arrivals, toward, upstream)
+
+    monkeypatch.setattr(anchors, "with_realtime_first_wait", spy)
+    with serve(make_settings(tmp_path), up) as c:
+        assert c.get("/api/transit", params=OD).status_code == 200
+    pair = ("bundang-K245", "bundang-K222")
+    assert pair in seen["toward"] and set(seen["upstream"]) == set(seen["toward"])
+    assert seen["upstream"][pair] == anchors.subway_upstream_s(c.app.state.lines, *pair)
 
 
 def test_transit_wait_is_empty_when_route_is_not_in_the_table(tmp_path, up):
@@ -414,6 +457,148 @@ def test_transit_without_headway_table(tmp_path, up):
         body = c.get("/api/transit", params=OD).json()
     assert body["wait_basis"] is None
     assert all("wait_s" not in r for r in body["routes"])
+
+
+# 하이브리드 — tiny 노선 380 이 지나는 야탑역 → 판교테크노 (앵커 후보가 나오는 좌표)
+HYB_OD = {"sx": 127.1195, "sy": 37.3645, "ex": 127.1123, "ey": 37.3948}
+
+
+def test_hybrid_plan(tmp_path, up):
+    with serve(make_settings(tmp_path), up) as c:
+        r = c.get("/api/hybrid", params={**HYB_OD, "top": 2})
+    assert r.status_code == 200, r.text
+    assert r.headers["cache-control"] == "no-store"
+    body = r.json()
+    # 선호는 시간 중시로 고정, 기준선은 같은 잣대로 잰 최소 시간 대중교통 경로
+    from algo import anchors
+    assert body["pref"] == "time" and body["vot"] == anchors.VOT["time"]
+    assert "comparisons" not in body
+    base = body["baseline"]
+    assert base["label"] == "최소 시간 경로" and base["time_s"] > 0 and base["route"]["steps"]
+    assert body["diag"]["picked"] <= 2 and body["diag"]["verified"] <= body["diag"]["picked"]
+    for row in body["routes"]:
+        assert row["hybrid"] in ("A", "B")
+        assert row["anchor"]["name"] and row["anchor"]["lat"] and row["anchor"]["lon"]
+        assert row["time_s"] > 0 and row["fare"] >= 0 and row["taxi"]["path"]
+        assert isinstance(row["pareto"], bool) and isinstance(row["recommended"], bool)
+        assert row["transit"] is None or row["transit"]["steps"]
+    assert body["quota"]["transit"]["used"] >= 1   # 기준 경로만도 1콜
+    # 검증 뒤 기준선보다 5분 이상 빠르지 않은 후보는 뺀다
+    assert body["diag"]["too_little_saving"] >= 0 and body["diag"]["min_saving_s"] == 300
+    assert all(base["time_s"] - row["time_s"] >= 300 for row in body["routes"])
+    no_keys(r.text)
+
+
+def test_hybrid_asks_for_both_taxi_directions(tmp_path, up, monkeypatch):
+    """(b) 역추적을 first-mile(A)·last-mile(B) 두 방향으로 돌린다 — (a) 섭동이 내는 B 와는 다른 후보다."""
+    from algo import anchors
+    seen = []
+    real = anchors.propose_backtrack
+
+    def spy(*args, **kw):
+        seen.append(kw.get("hybrid", "A"))
+        return real(*args, **kw)
+
+    merged = []
+    real_merge = anchors.merge_candidates
+
+    def merge_spy(*groups, top, **kw):
+        merged.append(len(groups))
+        return real_merge(*groups, top=top, **kw)
+
+    monkeypatch.setattr(anchors, "propose_backtrack", spy)
+    monkeypatch.setattr(anchors, "merge_candidates", merge_spy)
+    with serve(make_settings(tmp_path), up) as c:
+        body = c.get("/api/hybrid", params={**HYB_OD, "top": 2}).json()
+    assert sorted(seen[:2]) == ["A", "B"]   # 그 뒤로는 C 가 돌아가는 정류장마다 A 방향으로 다시 부를 수 있다
+    assert body["diag"]["backtrack_a"]["hybrid"] == "A" and body["diag"]["backtrack_b"]["hybrid"] == "B"
+    # D 후보도 함께 내고, 병합은 algo 규칙(택시 양끝 비교)으로 한다 — (b)A · (b)B · (a) · D 네 묶음
+    assert "anchors" in body["diag"]["gap"]
+    assert merged and merged[0] == 4   # C 는 예산을 따로 둬 한 번 더 병합할 수 있다
+    assert "detour" in body["diag"]
+
+
+def test_hybrid_uses_realtime_first_wait_for_baseline_and_gap(tmp_path, up, monkeypatch):
+    """첫 승차 대기를 실시간으로 바꾼 경로를 기준선 · D · (a) 의 B 에 쓰고, (a) 의 A 에만 원래 경로를 준다 (algo/cli 와 같은 규칙)."""
+    from algo import anchors
+    seen = {}
+    real_rt, real_gap, real_perturb = anchors.with_realtime_first_wait, anchors.propose_gap, anchors.propose_perturb
+
+    def rt_spy(routes, o, arrivals, toward=None, upstream=None):
+        out = real_rt(routes, o, arrivals, toward, upstream)
+        seen.update(rt_in=routes, rt_out=out[0], arrivals=arrivals)
+        return out
+
+    def gap_spy(o, d, routes, **kw):
+        seen["gap"] = routes
+        return real_gap(o, d, routes, **kw)
+
+    def perturb_spy(o, d, routes, **kw):
+        seen.setdefault("perturb", {})[kw.get("hybrids")] = routes
+        return real_perturb(o, d, routes, **kw)
+
+    for name, spy in (("with_realtime_first_wait", rt_spy), ("propose_gap", gap_spy), ("propose_perturb", perturb_spy)):
+        monkeypatch.setattr(anchors, name, spy)
+    with serve(make_settings(tmp_path), up) as c:
+        body = c.get("/api/hybrid", params={**HYB_OD, "top": 2}).json()
+    assert seen["gap"] is seen["rt_out"]        # D 는 실시간 사본에서
+    # (a) 는 A·B 를 나눠 부른다 — A 는 택시로 정류장에 닿아 원래 경로, B 는 걸어서 닿아 실시간 사본
+    assert seen["perturb"][("A",)] is seen["rt_in"]
+    assert seen["perturb"][("B",)] is seen["rt_out"]
+    assert "perturb_a" in body["diag"] and "perturb_b" in body["diag"]
+    assert seen["arrivals"]                     # 첫 승차 정류장·역의 도착정보를 받아 넘겼다
+    assert set(up.hosts()) & {"ws.bus.go.kr", "apis.data.go.kr", "swopenapi.seoul.go.kr"}
+    assert body["diag"]["realtime"] is not None
+
+
+def test_hybrid_reuses_the_search_result(tmp_path, up, monkeypatch):
+    """[경로 검색] 결과를 본문으로 보내면 기준 경로(출발 → 도착 대중교통)를 다시 부르지 않는다."""
+    import app.api as api_mod
+    od = (HYB_OD["sx"], HYB_OD["sy"], HYB_OD["ex"], HYB_OD["ey"])
+    with serve(make_settings(tmp_path), up) as c:
+        routes = c.get("/api/transit", params=HYB_OD).json()["routes"]
+        calls = []
+        real = api_mod.transit_payload
+
+        async def spy(st, sx, sy, ex, ey, *args, **kw):
+            calls.append((sx, sy, ex, ey))
+            return await real(st, sx, sy, ex, ey, *args, **kw)
+
+        monkeypatch.setattr(api_mod, "transit_payload", spy)
+        r = c.post("/api/hybrid", params={**HYB_OD, "top": 2}, json={"routes": routes})
+    assert r.status_code == 200, r.text
+    assert r.headers["cache-control"] == "no-store"
+    body = r.json()
+    assert body["diag"]["base_source"] == "reused"
+    assert od not in calls          # 앵커에서 다시 부르는 구간(A · (b) 의 B · C)만 남는다
+    assert body["baseline"]["route"]["steps"]
+
+
+def test_hybrid_get_still_calls_the_base_route(client):
+    assert client.get("/api/hybrid", params={**HYB_OD, "top": 1}).json()["diag"]["base_source"] == "called"
+
+
+@pytest.mark.parametrize("payload", [{"routes": "x"}, {"routes": []}, {"routes": [{"steps": [{"type": "BUS"}]}]}, ["routes"]])
+def test_hybrid_reuse_rejects_a_bad_body(client, payload):
+    error(client.post("/api/hybrid", params=HYB_OD, json=payload), 400, "invalid_request")
+
+
+def test_hybrid_ignores_pref(client):
+    """선호는 더 받지 않는다 — 옛 화면이 보내도 시간 중시로 찾는다."""
+    body = client.get("/api/hybrid", params={**HYB_OD, "top": 1, "pref": "cost"}).json()
+    assert body["pref"] == "time"
+
+
+def test_hybrid_without_db(tmp_path, up):
+    with serve(make_settings(tmp_path, with_db=False), up) as c:
+        error(c.get("/api/hybrid", params=HYB_OD), 503, "data_not_built")
+
+
+def test_hybrid_without_headway_table(tmp_path, up):
+    """배차표가 없으면 앵커 표(첫·막차)도 없다 — 하이브리드만 막히고 나머지는 그대로다."""
+    with serve(make_settings(tmp_path, with_headway=False), up) as c:
+        error(c.get("/api/hybrid", params=HYB_OD), 503, "data_not_built")
+        assert c.get("/api/transit", params=OD).status_code == 200
 
 
 def test_transit_without_db(tmp_path, up):
@@ -464,7 +649,8 @@ def test_local_quota_limit_blocks_second_call(tmp_path, up):
         err = error(c.get("/api/transit", params=OD), 429, "quota_exceeded")
         assert "(1건)" in err["message"]
         assert c.get("/api/quota").json()["transit"] == {"used": 1, "limit": 1, "remaining": 0}
-    assert up.hosts() == ["dapi.kakao.com"]  # 두 번째 요청은 카카오를 부르지 않았다
+    # 두 번째 요청은 카카오를 부르지 않았다 (첫 요청의 첫 승차 도착정보 원천은 세지 않는다)
+    assert [h for h in up.hosts() if "kakao" in h] == ["dapi.kakao.com"]
 
 
 @pytest.mark.parametrize("params", [

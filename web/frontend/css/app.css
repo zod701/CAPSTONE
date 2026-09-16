@@ -35,6 +35,10 @@
   --label-ring: rgba(0, 0, 0, 0.25);
   --route-casing: #FFFFFF; /* 지도 경로 선 테두리 */
   --route-walk: #757575;   /* 지도 도보 점선 */
+  --tip-bg: #FFFFFF;       /* 툴팁 말풍선 (tooltip.js · 지도 툴팁) */
+  --tip-ink: #212121;
+  --tip-border: #d6d6d6;
+  --tip-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
@@ -70,6 +74,10 @@
   --label-ring: rgba(255, 255, 255, 0.2);
   --route-casing: #101317;
   --route-walk: #b4bac1;
+  --tip-bg: #2d3138;
+  --tip-ink: #eceef1;
+  --tip-border: #454b54;
+  --tip-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
 }
 
 [hidden] { display: none !important; }
@@ -133,9 +141,8 @@ table.info td:first-child { white-space: nowrap; color: var(--ink-2); }
 section { padding: 10px 14px 12px; border-bottom: 1px solid var(--line); }
 section h2 { margin: 0 0 6px; font-size: 13px; }
 section h3 { margin: 10px 0 4px; font-size: 12px; }
-/* 한 섹션 안의 소구분 (경로 검색 결과 → 대중교통 / 택시) */
-.subsec > h3 { margin: 6px 0 4px; font-size: 12px; color: var(--ink-2); }
-.subsec + .subsec { margin-top: 10px; padding-top: 6px; border-top: 1px dashed var(--line); }
+/* 경로 검색 결과 — 택시 카드(늘 맨 위) · 탭 · 목록 */
+#car-body:not(:empty) { margin: 0 0 8px; }
 
 .muted { color: var(--muted); margin: 4px 0; }
 .hint { margin: 0 0 6px; color: var(--muted); }
@@ -150,6 +157,12 @@ small { color: var(--muted); }
 /* 검색 — 주소·장소 검색창(결과 목록은 칸 아래에 겹쳐 뜬다) + 출발·도착 이름.
    출발 / 바꾸기(↕) / 도착 세 줄: 표지와 바꾸기는 왼쪽 칸 — 바꾸기가 제 줄을 차지해 두 줄 사이가 벌어진다 */
 .place-search { margin: 0 0 8px; }
+/* 검색창 + 고른 장소를 곧바로 출발·도착으로 (고르기 전에는 잠김) */
+.place-row { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; }
+.place-row .place-search { flex: 1; margin: 0; }
+.od-pick { flex: 0 0 auto; border: 0; font: inherit; font-size: 12px; font-weight: 700; line-height: 29px; cursor: pointer; }
+.od-pick:disabled { opacity: 0.35; cursor: default; }
+.od-pick:not(:disabled):hover, .od-pick:focus-visible { filter: brightness(1.12); outline: 2px solid var(--sel-ring); outline-offset: 1px; }
 .od-fields { display: grid; grid-template-columns: auto 1fr; gap: 0 8px; margin: 0 0 8px; align-items: center; }
 .od-fields > .pin, .od-swap { grid-column: 1; }
 .od-swap {
@@ -230,14 +243,20 @@ small { color: var(--muted); }
 }
 
 /* 대중교통 결과: 종류별 탭 + 정렬 */
-.rt-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+.rt-tabs { display: flex; flex-wrap: wrap; gap: 3px; margin: 0 0 6px; }
 .rt-tab {
-  padding: 2px 9px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface);
+  padding: 2px 7px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface);
   font: inherit; font-size: 12px; color: inherit; cursor: pointer;
 }
 .rt-tab:hover { border-color: var(--border-hover); }
 .rt-tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
-.rt-n { margin-left: 4px; font-variant-numeric: tabular-nums; opacity: 0.75; }
+.rt-n { margin-left: 3px; font-variant-numeric: tabular-nums; opacity: 0.75; }
+.rt-n:empty { display: none; }
+.rt-tabs { align-items: center; }
+/* 버스 · 지하철 · 버스+지하철 — 같은 대중교통이라 한 틀로 묶어 전체·하이브리드와 구분한다 */
+.rt-group { display: inline-flex; flex-wrap: wrap; gap: 2px; padding: 1px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); }
+.rt-tab:disabled { opacity: 0.45; cursor: default; }
+.rt-tab:disabled:hover { border-color: var(--border-strong); }
 .rt-sort { display: flex; align-items: center; justify-content: flex-end; gap: 6px; font-size: 12px; color: var(--muted); }
 .rt-sort select { font: inherit; color: var(--ink); }
 
@@ -282,6 +301,7 @@ small { color: var(--muted); }
 .tl-name { font-weight: 600; padding: 2px 0; }
 /* 타고 오르는 지점의 기다리는 시간 (배차의 절반 추정) */
 .tl-wait { margin-left: 6px; font-weight: 400; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tl-wait.live { color: var(--ok); }   /* 실시간 도착정보로 잡은 대기 */
 .tl-end .tl-name { color: var(--accent); }
 .tl-line { width: 4px; min-height: 22px; border-radius: 2px; background: var(--rail-strong); }
 .tl-walk .tl-line { width: 0; border-radius: 0; background: none; border-left: 3px dotted var(--walk); }
@@ -354,6 +374,21 @@ small { color: var(--muted); }
 .badge.ok { background: var(--ok-bg); color: var(--ok); }
 .badge.warn { background: var(--warn-bg); color: var(--warn); }
 .badge.bad { background: var(--bad-bg); color: var(--bad); }
+.badge.mute { background: var(--surface-2); color: var(--muted); }
+
+/* 대중교통+택시 (하이브리드) — 버튼을 눌렀을 때만 서버가 앵커를 확인한다 */
+.hy-run { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 4px; }
+.hy-run button {
+  padding: 4px 10px; border: 1px solid var(--border-strong); border-radius: 4px;
+  background: var(--surface); color: inherit; font: inherit; cursor: pointer;
+}
+.hy-run button:hover:not(:disabled), .hy-run button:focus-visible { border-color: var(--accent); color: var(--accent); }
+.hy-run button:disabled { opacity: 0.5; cursor: default; }
+.hy-run small { color: var(--muted); }
+.hy-base { margin: 6px 0 4px; color: var(--ink-2); }
+.hy-info { margin-left: 2px; color: var(--muted); cursor: help; }   /* 요약 줄 옆 ⓘ — 추천 기준 · 실시간 · 확인한 앵커 · 뺀 후보 (title) */
+.hy-info:hover, .hy-info:focus-visible { color: var(--accent); outline: none; }
+.hy-vs { color: var(--muted); }
 
 /* 오류 상자 */
 .err {
@@ -540,11 +575,33 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 [data-theme="dark"] .leaflet-popup-content-wrapper,
 [data-theme="dark"] .leaflet-popup-tip { background: var(--surface); color: var(--ink); }
 [data-theme="dark"] .leaflet-container a.leaflet-popup-close-button { color: var(--muted); }
-[data-theme="dark"] .leaflet-tooltip:not(.stop-label) { background: var(--surface); color: var(--ink); border-color: var(--line); }
-[data-theme="dark"] .leaflet-tooltip-top::before { border-top-color: var(--surface); }
-[data-theme="dark"] .leaflet-tooltip-bottom::before { border-bottom-color: var(--surface); }
-[data-theme="dark"] .leaflet-tooltip-left::before { border-left-color: var(--surface); }
-[data-theme="dark"] .leaflet-tooltip-right::before { border-right-color: var(--surface); }
+/* 지도 위 마우스 툴팁(시군구 이름 · 도보 직선)도 앱 툴팁과 같은 말풍선 — 정류장 이름표(stop-label)는 늘 떠 있는 라벨이라 뺀다 */
+.leaflet-tooltip:not(.stop-label) {
+  padding: 5px 9px; background: var(--tip-bg); color: var(--tip-ink); border: 1px solid var(--tip-border);
+  border-radius: 6px; box-shadow: var(--tip-shadow); font-size: 12.5px;
+}
+.leaflet-tooltip-top:not(.stop-label)::before { border-top-color: var(--tip-bg); }
+.leaflet-tooltip-bottom:not(.stop-label)::before { border-bottom-color: var(--tip-bg); }
+.leaflet-tooltip-left:not(.stop-label)::before { border-left-color: var(--tip-bg); }
+.leaflet-tooltip-right:not(.stop-label)::before { border-right-color: var(--tip-bg); }
+
+/* 툴팁 — 모든 title 을 이 말풍선으로 띄운다(tooltip.js). 색은 화면 테마를 따른다: 밝은 화면은 흰 바탕, 다크 모드는 어두운 바탕 */
+.tip {
+  position: fixed; z-index: 10000; max-width: min(320px, calc(100vw - 16px)); padding: 7px 10px;
+  background: var(--tip-bg); color: var(--tip-ink); border: 1px solid var(--tip-border); border-radius: 6px;
+  box-shadow: var(--tip-shadow); font-size: 12.5px; line-height: 1.5; white-space: pre-line; overflow-wrap: anywhere;
+  pointer-events: none;
+}
+/* 화살표 — 요소 쪽(--ax 위치)을 가리키는 삼각형. 테두리 색 그림자를 1px 둘러 말풍선 테두리와 이어 보이게 */
+.tip-arrow {
+  position: absolute; top: -7px; left: calc(var(--ax, 16px) - 6px); width: 0; height: 0;
+  border-left: 6px solid transparent; border-right: 6px solid transparent; border-bottom: 7px solid var(--tip-bg);
+  filter: drop-shadow(0 -1px 0 var(--tip-border));
+}
+.tip.above .tip-arrow {
+  top: auto; bottom: -7px; border-bottom: 0; border-top: 7px solid var(--tip-bg);
+  filter: drop-shadow(0 1px 0 var(--tip-border));
+}
 
 @media (max-width: 720px) {
   body { flex-direction: column; }

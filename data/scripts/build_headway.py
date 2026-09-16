@@ -1,7 +1,7 @@
 """배차간격 표 (도시철도 = KTDB GTFS 시각표 · 버스 = 경기 GBIS 노선 파일 + 서울 노선 목록).
 
 1) **도시철도** (`headway_rail.csv`): GTFS `stop_times` 는 2025년 3월 **평일 1일의 실제 시각표**다 — 역·방향·시각별
-   정차를 세어 시간대(시)별 배차간격을 만든다(배차 = 60분 / 그 시간대 정차 횟수). 급행·지선·순환은 GTFS 가 노선을
+   정차를 세어 시간대(시)별 배차간격을 만든다(배차 = 180분 / 앞뒤 1시간을 합친 3시간 창의 정차 횟수). 급행·지선·순환은 GTFS 가 노선을
    따로 두므로, 한 역에 서는 모든 운행 패턴이 자연히 함께 세어진다. 종착(승차 불가, `pickup_type=1`)은 세지 않는다.
    역은 이름 키 + 노선군(`ref/line_groups.csv` 의 `gtfs_names`)으로 우리 역 DB 에 붙인다 — 별칭도 보고, 그 노선군 행이
    없으면 같은 이름이 300 m 안에 있는 다른 노선군 행에 붙인다(환승역의 운영기관별 행). 개명으로 이름이 아예 다른 역은
@@ -32,7 +32,7 @@ DIR_TAGS = (("<상행>", "상행"), ("<하행>", "하행"), ("<내선>", "내선
 SAME_STATION_M = 300.0   # 같은 이름이 이 안에 있으면 한 역의 운영기관별 행으로 본다 (매칭 규칙과 같은 값)
 BUS_COLUMNS = ["route_id", "route_name", "source", "day_type", "headway_min_m", "headway_max_m",
                "up_first", "up_last", "down_first", "down_last"]
-RAIL_COLUMNS = ["station_id", "name", "line_group", "direction", "hour", "n_trips", "headway_m"]
+RAIL_COLUMNS = ["station_id", "name", "line_group", "direction", "hour", "n_trips", "n_trips_3h", "headway_m"]
 
 
 def parse_hm(text):
@@ -179,14 +179,18 @@ def rail_counts(stop_times_path, keep):
 
 
 def rail_frame(counts, mapped):
-    """{(역, 노선군, 방향): {시: 횟수}} → 배차 행 (배차 = 60 / 정차 횟수)."""
+    """{(역, 노선군, 방향): {시: 횟수}} → 배차 행. 배차 = 180 / 앞뒤 1시간을 합친 3시간 창의 정차 횟수.
+
+    한 시간 칸만 세면 정차 1회인 칸이 모두 60분이 된다 — 시각이 시(時) 경계에 걸려 1회·2회가 번갈아 나오는
+    곳도 60분으로 적힌다. 창으로 세면 실제로 한 시간에 한 대인 곳은 60분 그대로 남는다."""
     out = []
     for (stop_id, group, direction), per_hour in counts.items():
         row = mapped.get((stop_id, group))
         if row is None:
             continue
         for hour, n in sorted(per_hour.items()):
-            out.append([row["station_id"], row["name"], group, direction, hour, n, round(60 / n, 1)])
+            n3 = per_hour.get(hour - 1, 0) + n + per_hour.get(hour + 1, 0)
+            out.append([row["station_id"], row["name"], group, direction, hour, n, n3, round(180 / n3, 1)])
     out.sort(key=lambda r: (r[2], r[0], r[3], r[4]))
     return pd.DataFrame(out, columns=RAIL_COLUMNS)
 
@@ -306,7 +310,12 @@ def main(argv=None):
         "",
         md_table(peak_rows, ("노선군", "방향", "배차(분)", "하루 운행 회차")),
         "",
-        f"- 배차 = 60분 / 그 시간대 정차 횟수. 24시 이후 시각은 `hour` 24·25 로 둔다(GTFS 표기 그대로).",
+        "- 배차 = 180분 / 3시간 창(그 시간대와 앞뒤 1시간)의 정차 횟수(`n_trips_3h`) — 한 시간 칸만 세면 정차 1회인 칸이 "
+        "시각이 시 경계에 걸린 것만으로 60분이 된다. `n_trips` 는 그 시간대만의 횟수다.",
+        f"- 정차 1회인 시간대 {int((rail['n_trips'] == 1).sum()):,}행 중 앞뒤 시간도 같은 방향 1회 이하라 60분 이상으로 남은 행 "
+        f"{int(((rail['n_trips'] == 1) & (rail['headway_m'] >= 60)).sum()):,}행 — 실제로 한 시간에 한 대 이하인 곳이다.",
+        "- 첫·막차 시간대는 창이 운행 없는 시간을 품어 배차가 넓게 나온다 — 이 시간대를 대기로 쓸지는 이 표가 정하지 않는다.",
+        "- 24시 이후 시각은 `hour` 24·25 로 둔다(GTFS 표기 그대로).",
         "- 급행·지선·순환은 GTFS 가 노선을 따로 두므로 한 역에 서는 모든 패턴이 함께 세어진다"
         " — 그 역에서 '아무 열차나' 기다리는 배차다.",
         "- 종착(승차 불가)은 세지 않는다 — 그래서 종착역은 한쪽 방향만 나온다(예: GTX-A 동탄).",

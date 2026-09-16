@@ -71,8 +71,10 @@ $env:PYTHONUTF8="1"
 | `GET /api/stops/{정류장키}/routes` | 버스 정류장을 지나는 노선 (미정차 제외, 이름 순). `data/processed/bus_route_stops.csv` 가 없으면 `data_not_built`(503) |
 | `GET /api/routes/{노선ID}` | 노선이 지나는 정류장 (운행 순서, 미정차 제외, 같은 정류장은 한 번) — 지도에서 정류장만 강조한다 |
 | `GET /api/boundaries` | 시군구 경계 GeoJSON (서울 25구 + 경기 31시·군) |
-| `GET /api/transit?sx&sy&ex&ey&probe=0` | 대중교통 경로 + 승·하차 정류장 매칭 진단 + 배차로 추정한 대기시간 (`probe=1` 은 응답 구조 요약 추가) |
+| `GET /api/transit?sx&sy&ex&ey&probe=0` | 대중교통 경로 + 승·하차 정류장 매칭 진단 + 대기시간(첫 승차는 실시간 도착정보, 나머지는 배차로 추정) (`probe=1` 은 응답 구조 요약 추가) |
 | `GET /api/car?sx&sy&ex&ey` | 자동차 경로·택시 요금 |
+| `GET /api/hybrid?sx&sy&ex&ey&top=5&t_max=15` | 대중교통+택시 연계 경로 (선호는 시간 중시로 고정 — 택시를 섞는 사람은 돈보다 시간이 급하다. 앵커 후보를 `algo` 가 만들고 상위 `top` 개만 카카오로 확인한다. **쿼터를 크게 쓴다** — 기준 경로 1콜 + 앵커마다 자동차 1콜, 대중교통은 A 유형과 (b) 역추적이 낸 B 유형에 1콜씩 더. 중간 공백을 메우는 D 는 자동차 1콜뿐. 돌아가는 구간에서 내리는 C 는 예산을 따로 둬 대중교통 최대 6 · 자동차 최대 8콜 — `top=5` 면 모두 합쳐 최대 25콜) |
+| `POST /api/hybrid?sx&sy&ex&ey&top&t_max` | 같은 출발·도착의 `/api/transit` 결과를 본문 `{"routes": [...]}` 로 받아 기준 경로로 다시 쓴다(대중교통 1콜 절약 — 최대 24콜). 첫 승차 실시간 대기는 배차 추정으로 되돌린 뒤 요청 시각으로 다시 매긴다. 본문이 올바르지 않으면 `invalid_request`(400). `diag.base_source` 가 `reused`(다시 씀)·`called`(새로 부름) |
 | `GET /api/search?q=` | 주소·장소 이름 → 출발·도착 후보 (키워드·주소 검색을 함께 불러 번지 주소 → 장소 → 지역 순. `q` 는 100자까지. 한쪽만 실패하면 `failed` 에 적고 다른 쪽 결과를 준다) |
 | `GET /api/arrivals/stop/{정류장키}` | 버스 정류장 실시간 도착 (그 정류장을 등록한 BIS 전부를 함께 부르고 도착 임박 순으로 합친다. 한쪽만 실패하면 `failed` 에 적고 다른 쪽 결과를 준다. 미정차·BIS 없는 정류장은 `no_realtime`(404)) |
 | `GET /api/arrivals/station/{역ID}` | 도시철도 역 실시간 도착 (매핑표의 실시간 역명으로 부르고 그 역의 노선만 남긴다. 원천이 하나라 `failed` 는 항상 빈 목록) |
@@ -80,6 +82,29 @@ $env:PYTHONUTF8="1"
 | `GET /tiles/vworld/{layer}/{z}/{y}/{x}` | VWorld 타일 프록시 (`Base`, `white`, `midnight`, `Hybrid`, `Satellite`; z 6–19, 단 `white`·`midnight` 는 z18 까지만. 프론트는 `Base`(밝은 화면) · `midnight`(다크 모드, z19 에서는 z18 을 확대)만 쓴다) |
 
 오류는 `{"error": {"code", "message", "action", "upstream_status"}}` 형태로 온다.
+
+하이브리드(`/api/hybrid`)는 **화면의 버튼을 눌렀을 때만** 부른다 — `top=5` 면 대중교통 최대 6콜 · 자동차 5콜이다.
+응답의 `routes[]` 는 `hybrid`(A = 택시 → 대중교통, B = 대중교통 → 택시, D = 기준 경로 한가운데 공백 한 구간만 택시,
+C = 기준 경로가 목적지에서 멀어지기 시작하는 정류장에서 내려 택시로 목적지까지 또는 곧장 가는 노선의 앵커로) ·
+`detour`(C 만 — `via` 가 `taxi_to_d`·`reanchor`, 내린 정류장 `point_name`, 돌아가는 비용 `loop_s`, `transit.steps` 에서 택시를 끼울 자리 `taxi_at`) ·
+`anchor`(갈아타는 정류장·역, D 는 택시 출발점 `from_lat`·`from_lon` 도) · `gap`(D 만 — 공백 종류 `wait`·`walk`, 뺀 시간, 다시 차를 타는지,
+`transit.steps` 에서 뺀 자리 `at`) · `taxi_counted_s`(총 시간에 넣은 택시 몫 — 호출 대기 포함, 택시 뒤에 차를 잡아야 하면 연결 여유도) ·
+`taxi`(자동차 경로 응답) · `transit`(A 와 (b) 역추적이 낸 B 는 따로 부른 경로, (a) 섭동이 낸 B 는 기준 경로를 앵커에서 자른 것,
+D 는 기준 경로에서 택시가 대신한 한 구간만 뺀 것) ·
+`time_s`·`fare`·`gc_s`·`won_per_min`·`recommended`·`pareto` 를 담고, `baseline` 이 기준선 — 받은 대중교통 경로 중 하이브리드와 같은 잣대(차내 + 첫·끝 도보 추정 + 대기)로 잰 최소 시간 경로다
+(5분 기준 걸러내기 · 원/분 · 추천 · Pareto 에 쓰고, 화면 카드의 "N분 절약 · N원 추가 · 원/분" 도 이것과 견준다).
+**첫 승차 대기는 실시간 도착정보로** 바꾼 기준 경로(`with_realtime_first_wait`)를 기준선 · D · (a) 섭동의 B 에 쓴다 — 첫 승차
+정류장·역마다 도착정보 1콜(공공데이터 쿼터, 15초 캐시)이고, 없거나 실패하면 정적 배차 대기로 남는다(`diag.realtime` 에 사유별 건수).
+(a) 섭동의 A 만 원래 경로를 쓴다 — 택시로 정류장에 닿아 '걸어서 닿는다' 는 전제가 맞지 않는다. 그래서 (a) 는 A·B 를 나눠 두 번
+부른다(`diag.perturb_a` · `perturb_b`). 실시간으로 바꾼 구간은
+`wait_source`(`realtime` 도착 예측 초 · `realtime_stops` 남은 정류장·역 수로 어림 · `realtime+headway` 알려진 차를 다 놓쳐
+배차간격으로 이음)와 `static_wait_s`(배차로만 추정한 값) · `walk_to_stop_s` 를 함께 단다.
+[경로 검색] 의 `/api/transit` 도 같은 방식으로 첫 승차 대기를 실시간으로 바꾼다(응답 `realtime` 에 사유별 건수) —
+출발지에서 걸어서 첫 정류장에 닿는 경로라 전제가 맞는다. 화면은 실시간으로 잡은 대기를 초록 '실시간' 으로 따로 보이고,
+마우스를 올리면 세 방식 중 무엇으로 잡았는지 밝힌다.
+검증한 뒤 **기준선보다 5분 이상 빠르지 않은 후보는 뺀다**(`compare.saves_enough`, `diag.too_little_saving` 에 뺀 수).
+후보 생성과 병합(`merge_candidates` — D 는 택시 양끝을 모두 비교한다)은 저장소 루트의 `algo` 패키지가 한다 —
+없으면 이 엔드포인트만 `hybrid_unavailable`(503) 이다.
 
 대기시간(`/api/transit`)은 구간마다 `step.headway_m`(배차 분)·`step.wait_s`, 경로마다 `route.wait_s`·`route.total_with_wait_s`,
 응답 맨 위에 `wait_basis{day_type, hour}` 로 온다. 사람이 아무 때나 온다고 보고 **대기 = 배차 ÷ 2** 이고, 한 구간에서 탈 수 있는
@@ -109,5 +134,7 @@ $env:PYTHONUTF8="1"
 - 카카오 응답은 요청을 처리하는 동안 메모리에만 둔다. 디스크·로그·캐시·브라우저 저장소(localStorage 등)에 남기지 않는다.
   로컬 검색 결과는 짧은 캐시도 금지라, 같은 검색어를 다시 쳐도 다시 부른다 (브라우저는 목록을 그리는 동안만 들고 있다).
 - 카카오에서 온 응답에는 `Cache-Control: no-store` 를 붙인다. 디스크에 쓰는 것은 호출 건수(`quota.json`)뿐이다.
+- 하이브리드는 화면이 방금 받은 [경로 검색] 결과를 요청 본문으로 돌려받아 기준 경로로 쓴다. 서버는 그 요청을 처리하는 동안에만 쓰고 어디에도 두지 않으며, 화면은 결과를 받은 지 5분 안이고 출발·도착이 그대로일 때만 보낸다(그 밖에는 새로 부른다).
+  카카오 공식 답변(devtalk 151435)은 "저장하여 사용하는 행위는 허용하지 않으며 실시간(라이브) 호출로만 이용" 이라는 원칙만 있고 같은 화면 안에서 받은 결과를 다시 쓰는 경우는 따로 언급하지 않는다 — 보관하지 않고 짧은 시간 안에만 쓰는 쪽으로 해석했다.
 - 테스트 픽스처는 문서 스키마를 보고 손으로 쓴 합성 데이터다(`"_note": "SYNTHETIC ..."`). 실제 응답을 픽스처로 저장하지 않는다.
 - 경로를 표시할 때 `© Kakao, Kakao Mobility` 를 표기한다.
