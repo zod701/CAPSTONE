@@ -14,7 +14,7 @@ r"""앵커 선택 실험 진입점 — plan(후보 생성·검증) / calibrate(�
 import argparse
 import asyncio
 import random
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import httpx
 
@@ -245,28 +245,26 @@ def _print_first_waits(routes, rt_routes):
 async def _verify_detour(api, d, cand, vot, at=None):
     """C 후보 확인 — 돌아가기 시작하는 정류장까지는 기준 경로 시간(`head_s`), 거기서부터 온라인으로 잰다.
 
-    택시로 목적지까지는 자동차 1콜, 직행 노선 앵커는 자동차 + 대중교통 2콜이다. 환승이 이어지면 뒤 노선은 기본요금을 빼고
-    거리 비례분만 더하고, 끊기면 뒤 노선 요금을 통째로 더한다(환승 판정은 응답 ETA 로 다시 한다).
+    택시로 목적지까지는 자동차 1콜, 직행 노선 앵커는 자동차 + 대중교통 2콜이다.
+    대중교통 요금은 앞뒤 구간의 거리와 환승 이력을 합쳐 다시 계산한다.
     """
     frm, pt = (cand["from_lon"], cand["from_lat"]), (cand["lon"], cand["lat"])
-    cap = cand.get("transit_fare_cap") or 0
     if cand["via"] == "taxi_to_d":
         car = await api.car(frm, d)
         time_s = cand["head_s"] + anchors.taxi_plan_s(car["duration_s"], connect=False)
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + cap
-        return {"cand": cand, "time_s": time_s, "fare": fare, "note": ""}
+        fare_info = anchors.candidate_fare(cand, anchors.taxi_plan_s(car["duration_s"], connect=False), at=at)
+        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
+        return {"cand": cand, "time_s": time_s, "fare": fare, "fare_info": fare_info, "note": fare_info["reason"]}
     car, leg = await asyncio.gather(api.car(frm, pt), api.transit(pt, d))
     legs = leg.get("routes") or []
     if not legs:
         return {"cand": cand, "time_s": None, "fare": None, "note": leg.get("status")}
-    best = min((compare.reconstruct(r, pt, d) for r in legs), key=lambda b: compare.gc_s(b["time_s"], b["fare"], vot))
     plan = anchors.taxi_plan_s(car["duration_s"], connect=True)
-    board_at = at + timedelta(seconds=cand["head_s"] + plan + cand["link_s"]) if at is not None else None
-    _, kept = anchors.transfer_fare(cap, True, True, cand["link_s"], plan, board_at)
-    tail = best["fare"] or 0
-    transit = cap + (max(0.0, tail - anchors.TRANSFER_REBASE_FARE) if kept else tail)
-    fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + transit
-    return {"cand": cand, "time_s": cand["head_s"] + plan + best["time_s"], "fare": fare, "note": ""}
+    options = [(compare.reconstruct(r, pt, d), anchors.candidate_fare(cand, plan, tail=r, at=at)) for r in legs]
+    best, fare_info = min(options, key=lambda x: compare.gc_s(x[0]["time_s"], x[1]["value"], vot))
+    fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
+    return {"cand": cand, "time_s": cand["head_s"] + plan + best["time_s"], "fare": fare,
+            "fare_info": fare_info, "note": fare_info["reason"]}
 
 
 async def _verify_one(api, o, d, cand, vot, at=None):
@@ -276,6 +274,7 @@ async def _verify_one(api, o, d, cand, vot, at=None):
     (a)의 B 는 앞 구간이 기준 경로에 있어 `car(앵커→D)` 1콜, D 는 공백 한 구간만 바꿔 `car(공백 시작→끝)` 1콜이다.
     """
     pt = (cand["lon"], cand["lat"])
+    fare_info = None
     if cand["hybrid"] == "C":
         return await _verify_detour(api, d, cand, vot, at)
     if cand["hybrid"] == "A":
@@ -303,19 +302,17 @@ async def _verify_one(api, o, d, cand, vot, at=None):
         eta = car["duration_s"] or 0
         time_s = (cand["base_time_s"] - cand["gap_s"]
                   + anchors.taxi_plan_s(eta, connect=cand["resume_ride"]))
-        # 환승이 이어지는지는 응답 ETA 로 다시 판정한다 — 오프라인 근사로 이어진다고 봤어도 실제 택시가 길면 끊긴다
-        plan = anchors.taxi_connect_s(eta)
-        board_at = at + timedelta(seconds=cand["board_offset_s"] + plan) if at is not None else None
-        transit, _ = anchors.transfer_fare(cand.get("transit_fare_cap"), cand["pre_ride"], cand["resume_ride"],
-                                           cand["link_s"], plan, board_at)
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (transit or 0)
+        fare_info = anchors.candidate_fare(cand, anchors.taxi_plan_s(eta, connect=cand["resume_ride"]), at=at)
+        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
     else:
         # (a)의 B 는 앞 구간이 기준 경로에 그대로 있다 — 대중교통 콜이 들지 않는다
         car = await api.car(pt, d)
         time_s = (cand["ride_s"] + (cand["wait_s"] or 0) + cand["walk_s"]
                   + anchors.taxi_plan_s(car["duration_s"], connect=False))
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (cand.get("transit_fare_cap") or 0)
-    return {"cand": cand, "time_s": time_s, "fare": fare, "note": ""}
+        fare_info = anchors.candidate_fare(cand, anchors.taxi_plan_s(car["duration_s"], connect=False), at=at)
+        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
+    return {"cand": cand, "time_s": time_s, "fare": fare, "fare_info": fare_info,
+            "note": fare_info["reason"] if fare_info else ""}
 
 
 def _report(rows, base, vot):
@@ -483,7 +480,7 @@ def main(argv=None):
     q.add_argument("--to", help="도착 'lon,lat'")
     q.add_argument("--pref", choices=sorted(anchors.VOT), default="balance")
     q.add_argument("--top", type=int, default=8, help="온라인으로 확인할 앵커 수")
-    q.add_argument("--t-max", type=int, default=15, help="택시 구간 상한(분)")
+    q.add_argument("--t-max", type=int, default=30, help="택시 구간 상한(분)")
     q.add_argument("--at", help="기준 시각 ISO (기본: 지금)")
     q.add_argument("--offline", action="store_true", help="쿼터를 쓰지 않고 후보 생성까지만")
     q.add_argument("--no-realtime", action="store_true", help="첫 승차 대기를 실시간 없이 정적 배차로만")

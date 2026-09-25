@@ -66,7 +66,7 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
         try:
             st.headway = HeadwayDB.load(settings.processed_dir)
         except FileNotFoundError:
-            st.headway = None   # 대기시간을 더한 소요 시간만 빠진다
+            st.headway = None   # 승차 구간마다 기본 대기 15분을 적용한다
         try:
             st.anchor_tables = AnchorTables.load(settings.processed_dir)
         except (FileNotFoundError, ApiError):

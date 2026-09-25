@@ -25,7 +25,7 @@ C = 기준 경로가 돌아가기 시작하는 정류장에서 내려 경로를 
 """
 import asyncio
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from geoutil import haversine_m
@@ -33,6 +33,7 @@ from geoutil import haversine_m
 from .config import KST
 from .errors import ApiError
 from .transit import normalize_car
+from .wait import apply_wait_defaults
 
 _ROOT = Path(__file__).resolve().parents[3]   # 저장소 루트 — algo 패키지를 찾는다
 if str(_ROOT) not in sys.path:
@@ -71,43 +72,24 @@ def _sgg(stops, anchors, pt):
     return anchors._sgg_at(anchors._near(stops, "bus", pt, SGG_RADII))
 
 
-def _chosen_id(step, role):
-    return (((step.get("resolution") or {}).get(role) or {}).get("chosen") or {}).get("id")
+def _cut_route(routes, cand):
+    """B 유형의 앞구간 — 후보가 계산에 쓴 원본 경로를 같은 하차 구간까지 자른 사본.
 
-
-def _cut_route(routes, anchor_id):
-    """B 유형의 앞구간 — 기준 경로에서 그 앵커에 내리는 구간까지 자른 사본(지도·구간 표시용).
-
-    후보의 시간·요금은 이미 매겨져 있고, 여기서 찾는 것은 **어느 경로를 어디서 잘랐는지**뿐이다.
+    같은 앵커를 지나는 경로·구간이 여럿이어도 후보에 보존한 위치로 정확히 찾는다.
     """
-    for route in routes:
-        for i, step in enumerate(route["steps"]):
-            if step["type"] in RIDE_TYPES and _chosen_id(step, "alight") == anchor_id:
-                return {**route, "steps": route["steps"][:i + 1]}
-    return None
+    route = routes[cand["route_index"]]
+    return {**route, "steps": route["steps"][:cand["step_index"] + 1]}
 
 
 def _gap_route(routes, cand):
-    """D 유형의 대중교통 부분 — 기준 경로에서 택시가 대신한 한 구간만 뺀 사본(지도·구간 표시용).
+    """D 유형의 대중교통 부분 — 후보가 계산에 쓴 원본 경로에서 공백 구간만 뺀 사본.
 
-    대기 공백은 그 승차 구간(승차 = 택시 출발, 하차 = 택시 도착)을, 도보 공백은 두 승차 사이의 환승 도보를 뺀다.
-    어느 경로의 어느 구간인지는 후보가 들고 있지 않아 택시 양끝의 정류소 id 로 찾는다.
-    → (경로, 뺀 자리) — 화면이 그 자리에 택시 구간을 끼워 타임라인을 그린다. 못 찾으면 (None, None).
+    대기 공백은 승차 구간을, 도보 공백은 환승 도보를 뺀다.
+    → (경로, 뺀 자리) — 화면은 같은 자리에 택시 구간을 끼운다.
     """
-    x_id, y_id = cand["anchor"].split(">", 1)
-    for route in routes:
-        steps = route["steps"]
-        rides = [i for i, s in enumerate(steps) if s["type"] in RIDE_TYPES]
-        for n, i in enumerate(rides):
-            if cand["gap"] == "wait":
-                if _chosen_id(steps[i], "board") == x_id and _chosen_id(steps[i], "alight") == y_id:
-                    return {**route, "steps": steps[:i] + steps[i + 1:]}, i
-            elif n + 1 < len(rides) and _chosen_id(steps[i], "alight") == x_id \
-                    and _chosen_id(steps[rides[n + 1]], "board") == y_id:
-                walks = [j for j in range(i + 1, rides[n + 1]) if steps[j]["type"] == "WALKING"]
-                if walks:
-                    return {**route, "steps": steps[:walks[0]] + steps[walks[0] + 1:]}, walks[0]
-    return None, None
+    route = routes[cand["route_index"]]
+    steps, i = route["steps"], cand["step_index"]
+    return {**route, "steps": steps[:i] + steps[i + 1:]}, i
 
 
 def _detour_route(routes, cand, anchors, o):
@@ -136,6 +118,8 @@ def _detour_route(routes, cand, anchors, o):
                        key=lambda n: haversine_m(step["path"][n][0], step["path"][n][1], hit["lon"], hit["lat"]))
             step["path"] = step["path"][:near + 1]
         step["time_s"], step["alight_name"] = hit["t"] - start, hit["name"]
+        if step.get("distance_m") is not None:
+            step["distance_m"] *= hit["fraction"]
         return {**route, "steps": route["steps"][:i] + [step]}, i + 1
     return None, None
 
@@ -145,7 +129,7 @@ def static_copy(routes):
 
     그 결과는 받은 시각의 실시간 대기를 달고 있다(with_realtime_first_wait 가 static_wait_s 에 원래 값을 남긴다).
     A 는 택시로 정류장에 닿아 원래 경로가 필요하고, 나머지는 이 요청 시각의 실시간으로 다시 매긴다. 경로 대기 합은 add_wait 와
-    같은 규칙이다 — 한 구간이라도 대기를 모르면 None.
+    같은 규칙이다 — 대기를 모르는 승차 구간마다 기본 15분을 적용한다.
     """
     out = []
     for route in routes:
@@ -153,14 +137,14 @@ def static_copy(routes):
         for step in steps:
             if "static_wait_s" in step:
                 step["wait_s"] = step.pop("static_wait_s")
+                source = step.pop("static_wait_source", None)
                 step.pop("wait_source", None)
+                if source is not None:
+                    step["wait_source"] = source
                 step.pop("walk_to_stop_s", None)
-        rides = [s for s in steps if s.get("type") in RIDE_TYPES]
-        ready = all(s.get("wait_s") is not None for s in rides)
-        wait = sum(s["wait_s"] for s in rides) if ready else None
-        total = route.get("total_time_s")
-        out.append({**route, "steps": steps, "wait_s": wait,
-                    "total_with_wait_s": total + wait if wait is not None and total is not None else None})
+        restored = {**route, "steps": steps}
+        apply_wait_defaults(restored)
+        out.append(restored)
     return out
 
 
@@ -230,16 +214,17 @@ async def _verify(st, transit_payload, o, d, cand, vot, anchors, compare, base_r
     anchor = {"id": cand["anchor"], "name": cand["name"], "lat": cand["lat"], "lon": cand["lon"],
               "kind": cand["kind"], "line_group": cand.get("line_group"), "sgg_nm": cand.get("sgg_nm")}
     detour = None
+    fare_info = None
     if cand["hybrid"] == "C":
         frm = (cand["from_lon"], cand["from_lat"])
-        cap = cand.get("transit_fare_cap") or 0
         head, taxi_at = _detour_route(live_routes or base_routes, cand, anchors, o)
         anchor.update(from_lat=cand["from_lat"], from_lon=cand["from_lon"])
         if cand["via"] == "taxi_to_d":
             car = normalize_car(await st.kakao.car(frm[0], frm[1], d[0], d[1]))
             taxi_counted_s = anchors.taxi_plan_s(car["duration_s"], connect=False)
             time_s = cand["head_s"] + taxi_counted_s
-            fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + cap
+            fare_info = anchors.candidate_fare(cand, taxi_counted_s, at=at)
+            fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
             route, wait_s, transit_time_s = head, None, cand["head_s"]
         else:
             car_raw, leg = await asyncio.gather(st.kakao.car(frm[0], frm[1], pt[0], pt[1]),
@@ -247,14 +232,11 @@ async def _verify(st, transit_payload, o, d, cand, vot, anchors, compare, base_r
             car = normalize_car(car_raw)
             if not leg["routes"]:
                 return None
-            best, leg_route = _pick_leg(leg["routes"], pt, d, vot, compare)
             taxi_counted_s = anchors.taxi_plan_s(car["duration_s"], connect=True)
-            # 환승이 이어지는지는 응답 ETA 로 다시 판정한다 — 이어지면 뒤 노선은 기본요금을 빼고 거리 비례분만 더한다
-            board_at = at + timedelta(seconds=cand["head_s"] + taxi_counted_s + cand["link_s"]) if at is not None else None
-            _, kept = anchors.transfer_fare(cap, True, True, cand["link_s"], taxi_counted_s, board_at)
-            tail = best["fare"] or 0
-            transit = cap + (max(0.0, tail - anchors.TRANSFER_REBASE_FARE) if kept else tail)
-            fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + transit
+            options = [(compare.reconstruct(r, pt, d), r,
+                        anchors.candidate_fare(cand, taxi_counted_s, tail=r, at=at)) for r in leg["routes"]]
+            best, leg_route, fare_info = min(options, key=lambda x: compare.gc_s(x[0]["time_s"], x[2]["value"], vot))
+            fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
             time_s = cand["head_s"] + taxi_counted_s + best["time_s"]
             route = {**leg_route, "steps": (head["steps"] if head else []) + leg_route["steps"]}
             taxi_at = len(head["steps"]) if head else 0
@@ -278,12 +260,8 @@ async def _verify(st, transit_payload, o, d, cand, vot, anchors, compare, base_r
         # 공백을 빼고 택시(호출 대기 포함)를 넣는다. 내린 뒤 다시 차를 타면(resume_ride) 연결 버퍼도 씌운다 (algo 와 한 벌)
         taxi_counted_s = anchors.taxi_plan_s(eta, connect=cand["resume_ride"])
         time_s = cand["base_time_s"] - cand["gap_s"] + taxi_counted_s
-        # 환승이 이어지는지는 응답 ETA 로 다시 판정한다 — 오프라인 근사로 이어진다고 봤어도 실제 택시가 길면 끊긴다
-        plan_s = anchors.taxi_connect_s(eta)
-        board_at = at + timedelta(seconds=cand["board_offset_s"] + plan_s) if at is not None else None
-        transit, _ = anchors.transfer_fare(cand.get("transit_fare_cap"), cand["pre_ride"], cand["resume_ride"],
-                                           cand["link_s"], plan_s, board_at)
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (transit or 0)
+        fare_info = anchors.candidate_fare(cand, taxi_counted_s, at=at)
+        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
         route, gap_at = _gap_route(live_routes or base_routes, cand)
         wait_s = cand["wait_s"]
         transit_time_s = cand["ride_s"] + (wait_s or 0) + cand["walk_s"]
@@ -302,17 +280,18 @@ async def _verify(st, transit_payload, o, d, cand, vot, anchors, compare, base_r
         wait_s = best["wait_s"]
     else:
         car = normalize_car(await st.kakao.car(pt[0], pt[1], d[0], d[1]))
-        route = _cut_route(live_routes or base_routes, cand["anchor"])
+        route = _cut_route(live_routes or base_routes, cand)
         wait_s = cand["wait_s"]
         transit_time_s = cand["ride_s"] + (wait_s or 0) + cand["walk_s"]
         taxi_counted_s = anchors.taxi_plan_s(car["duration_s"], connect=False)
         time_s = transit_time_s + taxi_counted_s
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (cand.get("transit_fare_cap") or 0)
+        fare_info = anchors.candidate_fare(cand, taxi_counted_s, at=at)
+        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
     if not car["path"]:
         return None   # 택시 구간을 못 얻으면 시간도 지도도 반쪽이다
     return {"hybrid": cand["hybrid"], "strategy": cand["strategy"], "anchor": anchor,
             "ride_name": cand.get("ride_name"), "headway_m": cand.get("headway_m"),
-            "time_s": time_s, "fare": fare, "wait_s": wait_s, "transit_time_s": transit_time_s,
+            "time_s": time_s, "fare": fare, "fare_info": fare_info, "wait_s": wait_s, "transit_time_s": transit_time_s,
             "taxi_counted_s": taxi_counted_s,   # 총 시간에 넣은 택시 몫 (호출 대기 · 연결 여유 포함)
             "detour": detour,
             "gap": ({"kind": cand["gap"], "removed_s": cand["gap_s"], "resume_ride": cand["resume_ride"], "at": gap_at}
@@ -320,7 +299,7 @@ async def _verify(st, transit_payload, o, d, cand, vot, anchors, compare, base_r
             "taxi": car, "transit": route}
 
 
-async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, top=5, t_max_s=900, now=None):
+async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, top=5, t_max_s=1800, now=None):
     """앵커 후보 생성 → 상위 top 개 온라인 확인 → 기준 경로와 함께 견준 결과.
 
     `base_routes` 를 주면 기준 경로를 새로 부르지 않고 그것(같은 출발·도착의 [경로 검색] 결과)을 쓴다.

@@ -85,12 +85,12 @@ def test_later_step_is_looked_up_at_the_hour_it_is_boarded():
     assert r["wait_s"] == 300 + 600
 
 
-def test_missing_headway_leaves_route_total_empty():
+def test_missing_headway_adds_default_to_known_wait():
     r = route([bus_step(["C"]), subway_step("S1")])
     add_wait([r], DB, MON_8)
-    assert r["steps"][0]["wait_s"] is None
+    assert (r["steps"][0]["wait_s"], r["steps"][0]["wait_source"]) == (900, "default")
     assert r["steps"][1]["wait_s"] == 150   # 구간별 값은 그대로 준다
-    assert (r["wait_s"], r["total_with_wait_s"]) == (None, None)
+    assert (r["wait_s"], r["total_with_wait_s"]) == (1050, 2250)
 
 
 @pytest.mark.parametrize("step", [
@@ -98,10 +98,10 @@ def test_missing_headway_leaves_route_total_empty():
     {"type": "SUBWAY", "time_s": 600, "line_group": None, "resolution": {"board": {"chosen": {"id": "S1"}}}},
     {"type": "SUBWAY", "time_s": 600, "line_group": "1호선"},   # 매칭을 돌리지 않은 응답
 ])
-def test_subway_without_matching_has_no_wait(step):
+def test_subway_without_matching_uses_default_wait(step):
     r = route([step])
     add_wait([r], DB, MON_8)
-    assert (r["steps"][0]["wait_s"], r["wait_s"]) == (None, None)
+    assert (r["steps"][0]["wait_s"], r["wait_s"]) == (900, 900)
 
 
 def test_walking_only_route_has_no_wait_but_is_complete():
@@ -133,3 +133,18 @@ def test_same_name_candidates_count_as_one_route():
     both = route([bus_step(["X1", "X2", "Y"])])
     add_wait([both], db, MON_8, names)
     assert both["steps"][0]["headway_m"] == 10.0            # 20분짜리 '5' 와 20분짜리 '7' 을 함께 기다린다
+
+
+def test_default_wait_applies_per_ride_not_per_route():
+    r = route([bus_step(["missing"]), {"type": "WALKING", "time_s": 60}, bus_step(["C"])])
+    add_wait([r], DB, MON_8)
+    assert r["wait_s"] == 1800
+    assert r["total_with_wait_s"] == 3060
+    assert r["steps"][1]["wait_s"] is None
+
+
+def test_default_wait_advances_later_boarding_hour():
+    r = route([bus_step(["missing"], time_s=3000), subway_step("S1")])
+    add_wait([r], DB, MON_8)
+    assert r["steps"][1]["headway_m"] == 20
+    assert r["wait_s"] == 1500

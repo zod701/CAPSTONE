@@ -626,6 +626,7 @@ def resolve_route(db, route, radius_m, ambig_gap_m, memo=None, routes=None, line
                 e["status"], e["line_filter"] = "ambiguous", "unlinked"
         step["resolution"] = res
         step["route_ids"] = list(rids)   # 가려낸 버스 노선 (대기시간 추정이 배차를 찾는 키 — wait.py)
+        step["fare_routes"] = [routes._brief(rid) for rid in rids] if kind == "bus" and routes else []
 
         groups = {db.kakao_group(n) for n in names} - {None} if kind == "subway" else set()
         # 중간 정류소도 가린 노선이 서는 쪽을 먼저 본다 (노선을 못 가렸으면 None — 이름·거리만으로 고른다)

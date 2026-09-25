@@ -443,20 +443,24 @@ def test_transit_realtime_gets_subway_upstream_times(tmp_path, up, monkeypatch):
     assert seen["upstream"][pair] == anchors.subway_upstream_s(c.app.state.lines, *pair)
 
 
-def test_transit_wait_is_empty_when_route_is_not_in_the_table(tmp_path, up):
-    """합성 경로의 버스 470 은 순서표에 없어 노선을 못 가린다 → 경로 합은 주지 않는다."""
+def test_transit_wait_uses_default_when_route_is_not_in_the_table(tmp_path, up):
+    """합성 경로의 버스 470 은 순서표에 없어 노선을 못 가린다 → 기본 대기 15분을 합계에 반영한다."""
     with serve(make_settings(tmp_path), up) as c:
         body = c.get("/api/transit", params=OD).json()
     bus = body["routes"][1]
-    assert (bus["steps"][0]["route_ids"], bus["steps"][0]["wait_s"]) == ([], None)
-    assert (bus["wait_s"], bus["total_with_wait_s"]) == (None, None)
+    assert (bus["steps"][0]["route_ids"], bus["steps"][0]["wait_s"]) == ([], 900)
+    assert bus["steps"][0]["wait_source"] == "default"
+    assert (bus["wait_s"], bus["total_with_wait_s"]) == (900, bus["total_time_s"] + 900)
 
 
 def test_transit_without_headway_table(tmp_path, up):
     with serve(make_settings(tmp_path, with_headway=False), up) as c:
         body = c.get("/api/transit", params=OD).json()
-    assert body["wait_basis"] is None
-    assert all("wait_s" not in r for r in body["routes"])
+    assert body["wait_basis"] is not None
+    for route in body["routes"]:
+        rides = [s for s in route["steps"] if s["type"] in ("BUS", "SUBWAY")]
+        assert all(s["wait_s"] == 900 and s["wait_source"] == "default" for s in rides)
+        assert route["total_with_wait_s"] == route["total_time_s"] + 900 * len(rides)
 
 
 # 하이브리드 — tiny 노선 380 이 지나는 야탑역 → 판교테크노 (앵커 후보가 나오는 좌표)

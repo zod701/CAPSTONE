@@ -5,7 +5,7 @@
 대기의 기댓값은 배차의 절반이다. 한 구간에서 탈 수 있는 노선이 여럿이면(카카오 `vehicles` 가 여럿) 먼저 오는
 차를 타므로 **빈도를 더한다** — 유효 배차 = 1 / Σ(1/hᵢ), 10분·15분이면 6분(대기 3분)이다.
 
-한 구간이라도 배차를 모르면 경로 전체 합은 주지 않는다(`wait_s=None`) — 빠진 구간만큼 짧게 나와 오히려 틀린 값이다.
+배차를 모르는 승차 구간은 기본 대기 15분을 적용하고 `wait_source=default` 로 표시한다.
 지하철 배차는 시간대별이라 각 구간을 **탈 시각**(출발 시각 + 앞 구간들의 이동·대기)으로 조회한다.
 """
 from datetime import timedelta
@@ -14,6 +14,21 @@ from statistics import fmean
 DAY_TYPE = ("월", "화", "수", "목", "금", "토요일", "일요일")   # weekday() 순서 — 공휴일은 가리지 않는다
 WEEKDAY = "평일"
 RAIL_HOURS = range(5, 26)   # 표의 시간대 (25 = 다음날 1시). 그 밖(새벽 2~4시)은 값이 없다
+
+
+DEFAULT_WAIT_S = 900.0   # 배차를 모르는 승차 구간마다 적용하는 기본 대기 15분
+
+
+def apply_wait_defaults(route):
+    """미확인 승차 대기에 기본값과 출처를 채우고 경로 합계를 갱신한다."""
+    rides = [s for s in route["steps"] if s["type"] in ("BUS", "SUBWAY")]
+    for step in rides:
+        if step.get("wait_s") is None:
+            step["wait_s"] = DEFAULT_WAIT_S
+            step["wait_source"] = "default"
+    route["wait_s"] = sum(s["wait_s"] for s in rides)
+    total = route.get("total_time_s")
+    route["total_with_wait_s"] = total + route["wait_s"] if total is not None else None
 
 
 def day_type(now):
@@ -66,6 +81,8 @@ def _board_station(step):
 
 def _step_headway(step, db, day, at, routes):
     """구간의 배차(분) — 버스는 노선들의 유효 배차, 지하철은 탄 역·노선군의 그 시간대 배차."""
+    if db is None:
+        return None
     if step["type"] == "BUS":
         return _bus_headway(db, step.get("route_ids") or (), day, routes)
     if step["type"] == "SUBWAY":
@@ -86,22 +103,20 @@ def add_wait(transit_routes, db, now, routes=None):
     day = day_type(now)
     for route in transit_routes:
         at = now              # 이 구간을 탈 시각 (앞 구간들의 이동·대기를 더해 온 값)
-        total, ready = 0, True
         for step in route["steps"]:
             step["wait_s"] = None
             step["headway_m"] = None
+            step.pop("wait_source", None)
             ride = step["type"] in ("BUS", "SUBWAY")
             if ride:
                 h = _step_headway(step, db, day, at, routes)
                 if h is None:
-                    ready = False
+                    step["wait_s"] = DEFAULT_WAIT_S
+                    step["wait_source"] = "default"
                 else:
                     step["headway_m"] = round(h, 1)
                     step["wait_s"] = round(h * 60 / 2)
-                    total += step["wait_s"]
-                    at += timedelta(seconds=step["wait_s"])
+                at += timedelta(seconds=step["wait_s"])
             at += timedelta(seconds=step.get("time_s") or 0)
-        route["wait_s"] = total if ready else None
-        route["total_with_wait_s"] = (route["total_time_s"] + total
-                                      if ready and route["total_time_s"] is not None else None)
+        apply_wait_defaults(route)
     return {"day_type": day, "hour": now.hour}

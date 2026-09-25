@@ -4,6 +4,7 @@
 (a) 섭동이 낸 B 처럼 다루면 있지도 않은 앞구간을 기준 경로에서 찾게 된다 — 그 경계를 못으로 박아 둔다.
 """
 import asyncio
+from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
@@ -61,7 +62,8 @@ def cand(hybrid, strategy, **extra):
     base = {"hybrid": hybrid, "strategy": strategy, "anchor": "stop-1", "name": "환승 정류장",
             "lat": ANCHOR["lat"], "lon": ANCHOR["lon"], "kind": "bus", "line_group": None,
             "sgg_nm": "성남시", "ride_name": "380", "headway_m": 10.0,
-            "wait_s": 300, "ride_s": 900, "walk_s": 120, "transit_fare_cap": 1450}
+            "wait_s": 300, "ride_s": 900, "walk_s": 120, "transit_fare_cap": 1450,
+            "route_index": 0, "step_index": 0}
     return {**base, **extra}
 
 
@@ -114,6 +116,72 @@ def test_perturb_last_mile_reuses_the_base_route_without_a_call():
     assert row["fare"] == 9000 + 1450                              # 기준 경로 요금이 상한
 
 
+@pytest.mark.parametrize("waits,expected", [((0, 0), 0), ((None, 120), 1020), ((120, 180), 300)])
+def test_perturb_last_mile_returns_zero_or_default_wait(waits, expected):
+    base = transit_route(board=O, alight=ANCHOR_PT, wait_s=waits[0])
+    tail = transit_route(board=ANCHOR_PT, alight=ANCHOR_PT, wait_s=waits[1])["steps"][0]
+    tail["resolution"]["alight"]["chosen"]["id"] = "last-stop"
+    base["steps"] += [{"type": "WALKING", "time_s": 60}, tail]
+    candidates, _ = anchors.propose_perturb(O, D, [base], vot=500, hybrids=("B",), t_max_s=10000)
+    candidate = next(c for c in candidates if c["step_index"] == 2)
+    row = run(candidate, Calls(), base_routes=[base])
+    assert row["wait_s"] == expected
+    assert row["transit_time_s"] == 2460 + (expected or 0)
+
+
+def test_perturb_last_mile_keeps_the_selected_source_route():
+    slow = transit_route(board=O, alight=ANCHOR_PT, time_s=2400)
+    fast = transit_route(board=O, alight=ANCHOR_PT, time_s=600)
+    routes = [slow, fast]
+    original = deepcopy(routes)
+    candidates, _ = anchors.propose_perturb(O, D, routes, vot=500, hybrids=("B",), t_max_s=10000)
+    candidate, = anchors.merge_candidates(candidates, top=1)
+    row = run(candidate, Calls(), base_routes=routes)
+    assert row["transit"]["steps"] == fast["steps"]
+    assert row["time_s"] == 600 + 300 + row["taxi_counted_s"]
+    assert routes == original
+
+
+@pytest.mark.parametrize("gap", ["walk", "wait"])
+def test_gap_keeps_the_selected_source_route(gap):
+    fast = named_route()
+    if gap == "walk":
+        fast["steps"][1]["time_s"] = 3600
+        removed = 1
+    else:
+        fast["steps"][2]["resolution"] = {"board": {"chosen": X}, "alight": {"chosen": Y}}
+        fast["steps"][2]["wait_s"] = 3600
+        fast["wait_s"] = 3900
+        removed = 2
+    slow = deepcopy(fast)
+    slow["steps"][0]["time_s"] = 2400
+    routes = [slow, fast]
+    original = deepcopy(routes)
+    candidates, _ = anchors.propose_gap(O, D, routes, vot=500, t_max_s=10000)
+    candidate, = anchors.merge_candidates(candidates, top=1)
+    row = run(candidate, Calls(), base_routes=routes)
+    expected = fast["steps"][:removed] + fast["steps"][removed + 1:]
+    assert row["transit"]["steps"] == expected
+    assert row["gap"]["at"] == removed
+    assert row["time_s"] == pytest.approx(
+        sum(s["time_s"] + (s.get("wait_s") or 0) for s in expected)
+        + candidate["walk_s"] + row["taxi_counted_s"])
+    assert routes == original
+
+
+def test_gap_keeps_the_selected_occurrence_within_a_route():
+    base = named_route()
+    for step in (base["steps"][0], base["steps"][2]):
+        step["resolution"] = {"board": {"chosen": X}, "alight": {"chosen": Y}}
+    base["steps"][2]["wait_s"] = 3600
+    base["wait_s"] = 3900
+    candidates, _ = anchors.propose_gap(O, D, [base], vot=500, t_max_s=10000)
+    candidate, = candidates
+    row = run(candidate, Calls(), base_routes=[base])
+    assert row["transit"]["steps"] == base["steps"][:2]
+    assert row["gap"]["at"] == 2
+
+
 def test_no_leg_from_the_anchor_drops_the_candidate():
     calls = Calls(legs=None)   # 앵커에서 갈 수 있는 대중교통 경로가 없다
     assert run(cand("A", "b"), calls) is None
@@ -139,7 +207,8 @@ def three_step_route():
 def gap_cand(gap, resume_ride, **extra):
     return cand("D", "a", anchor="gx>gy", name="타는곳→내리는곳", gap=gap, gap_s=1200,
                 from_lon=X["lon"], from_lat=X["lat"], lon=Y["lon"], lat=Y["lat"],
-                base_time_s=3000, resume_ride=resume_ride, pre_ride=True, link_s=60, board_offset_s=900, **extra)
+                base_time_s=3000, resume_ride=resume_ride, pre_ride=True, link_s=60, board_offset_s=900,
+                step_index=1 if gap == "walk" else 2, **extra)
 
 
 @pytest.mark.parametrize("resume, taxi_s", [(True, None), (False, 600)])
@@ -150,9 +219,9 @@ def test_gap_replaces_one_leg_with_one_car_call(resume, taxi_s):
     assert calls.transit == []                                           # 나머지는 기준 경로에 있다
     # 기준 − 공백 + 택시(호출 대기 포함). 내린 뒤 다시 차를 타면 연결 버퍼도 씌운다 — 목적지까지면 버퍼 없음
     assert row["time_s"] == pytest.approx(3000 - 1200 + anchors.taxi_plan_s(600, connect=resume))
-    # 요금은 응답 ETA 로 환승이 이어지는지 다시 판정한 값 (algo/cli 와 같다)
-    transit, _ = anchors.transfer_fare(1450, True, resume, 60, anchors.taxi_connect_s(600))
-    assert row["fare"] == pytest.approx(9000 + transit)
+    # 이 수제 후보에는 요금용 구간 정보가 없어 대체값과 사유가 표시된다.
+    assert row["fare"] == pytest.approx(9000 + 1450)
+    assert row["fare_info"]["source"] == "fallback"
     assert row["anchor"]["from_lat"] == X["lat"] and row["gap"]["kind"] == "walk"
 
 
@@ -240,9 +309,9 @@ def test_detour_reanchor_calls_car_and_transit_and_judges_transfer():
     assert calls.transit == [((ANCHOR["lon"], ANCHOR["lat"]), D)]
     plan = anchors.taxi_plan_s(600, connect=True)
     assert row["time_s"] == pytest.approx(900 + plan + 1500)
-    _, kept = anchors.transfer_fare(1450, True, True, 200, plan)
     tail = 1500
-    assert row["fare"] == pytest.approx(9000 + 1450 + (max(0.0, tail - anchors.TRANSFER_REBASE_FARE) if kept else tail))
+    assert row["fare"] == pytest.approx(9000 + 1450 + tail)
+    assert row["fare_info"]["source"] == "fallback"  # 정보 없이 기본요금을 일괄 차감하지 않는다.
     # 화면: 앞구간(돌아가기 전까지) + 다시 부른 경로, 택시는 그 사이
     assert row["detour"]["taxi_at"] == 1
     assert [st["type"] for st in row["transit"]["steps"]] == ["BUS", "BUS"]
@@ -265,6 +334,42 @@ def test_detour_cuts_a_ride_at_its_middle_stop():
     assert cut["time_s"] == pytest.approx(mid["t"])   # 900 × 거리 비율(1/3)
 
 
+def test_c_verification_web_and_cli_use_accumulated_distance_fare():
+    from algo.cli import _verify_detour
+    from app.transit import normalize_car
+
+    head = named_route()["steps"][0]
+    head.update(distance_m=8000, fare_routes=[{"id": "first", "name": "first", "source": "gyeonggi", "type": "일반"}])
+    tail = transit_route(fare=1650)
+    tail["steps"][0].update(distance_m=8000,
+                            fare_routes=[{"id": "second", "name": "second", "source": "gyeonggi", "type": "일반"}])
+    c = detour_cand("reanchor", fare_steps=[head, {"type": "TAXI", "time_s": 0}])
+    calls = Calls(tail)
+    web = run(c, calls, base_routes=[named_route()])
+
+    async def car(o, d):
+        return normalize_car(car_raw())
+
+    async def transit(o, d):
+        return {"routes": [tail]}
+
+    cli = asyncio.run(_verify_detour(SimpleNamespace(car=car, transit=transit), D, c, 500))
+    assert web["fare"] == cli["fare"] == 9000 + 1850
+    assert web["fare_info"]["source"] == cli["fare_info"]["source"] == "rules_estimate"
+
+
+def test_b_verification_uses_partial_fare_and_d_uses_actual_eta():
+    base = three_step_route()
+    for i in (0, 2):
+        base["steps"][i].update(distance_m=8000,
+            fare_routes=[{"id": str(i), "name": str(i), "source": "gyeonggi", "type": "일반"}])
+    b = cand("B", "a", fare_steps=[base["steps"][0], {"type": "TAXI", "time_s": 0}], transit_fare_cap=4000)
+    assert run(b, Calls(), base_routes=[base])["fare"] == 9000 + 1650
+    d = gap_cand("walk", True, fare_steps=[base["steps"][0], {"type": "TAXI", "time_s": 9999}, base["steps"][2]])
+    # 후보의 임시 9999초 대신 실제 자동차 ETA 600초를 쓴다.
+    assert run(d, Calls(), base_routes=[base])["fare"] == 9000 + 1850
+
+
 def test_static_copy_restores_the_scheduled_first_wait():
     """[경로 검색] 결과에 든 실시간 첫 대기를 배차 추정으로 되돌린다 — 원본은 그대로 두고 경로 대기 합도 다시 낸다."""
     live = transit_route()
@@ -277,9 +382,26 @@ def test_static_copy_restores_the_scheduled_first_wait():
     assert live["steps"][0]["wait_s"] == 40 and live["wait_s"] == 40
 
 
-def test_static_copy_keeps_unknown_waits_unknown():
+def test_static_copy_restores_default_for_unknown_static_wait():
     route = transit_route()
     route["steps"][0].update(static_wait_s=None, wait_s=500, wait_source="realtime")
     route.update(total_time_s=1000)
     back = static_copy([route])[0]
-    assert (back["steps"][0]["wait_s"], back["wait_s"], back["total_with_wait_s"]) == (None, None, None)
+    assert (back["steps"][0]["wait_s"], back["wait_s"], back["total_with_wait_s"]) == (900, 900, 1900)
+
+
+def test_realtime_replaces_default_and_reuse_restores_default_source():
+    from app.wait import apply_wait_defaults
+    route = transit_route(board=O, alight=ANCHOR_PT, wait_s=None)
+    route["total_time_s"] = 1200
+    route["steps"][0]["route_ids"] = ["r1"]
+    apply_wait_defaults(route)
+    live, _ = anchors.with_realtime_first_wait([route], O, {
+        "stop-1": [{"route_id": "r1", "eta_s": 0}]})
+    assert live[0]["steps"][0]["wait_source"] == "realtime"
+    assert live[0]["wait_s"] == 0
+    restored = static_copy(live)[0]
+    assert restored["steps"][0]["wait_source"] == "default"
+    assert restored["wait_s"] == 900
+    assert restored["total_with_wait_s"] == 2100
+    assert live[0]["wait_s"] == 0

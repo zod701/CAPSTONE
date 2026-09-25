@@ -7,7 +7,7 @@
 """
 from geoutil import haversine_m
 
-from algo.anchors import RIDE_TYPES, TAXI_MIN_SAVING_S, _chosen, walk_s
+from algo.anchors import WAIT_UNKNOWN_S, RIDE_TYPES, TAXI_MIN_SAVING_S, _chosen, walk_s
 
 # 대중교통 요금이 범위로 올 때는 낮은 쪽을 쓴다 — 정렬에서도 택시와 견줄 때도 같은 규칙이다 (method.md §7.2, E11)
 def fare_of(fare):
@@ -36,13 +36,13 @@ def edge_walk_m(steps, o, d):
 def reconstruct(route, o, d):
     """대중교통 경로 하나를 우리 잣대로 → {time_s, fare, walk_m, transfers, wait_s}.
 
-    대기가 한 구간이라도 비면 `wait_s` 는 None 이고 시간에도 넣지 않는다 — 빠진 구간만큼 짧은 값은
-    없는 것보다 나쁘다(§7.5). 그때는 대기를 뺀 시간이라는 것을 `wait_s is None` 으로 알린다.
+    대기를 모르는 승차 구간마다 기본 대기 15분을 적용한다. 알려진 대기와 실제 0초는 그대로 쓴다.
     """
     steps = route["steps"]
     ride = sum(s.get("time_s") or 0 for s in steps)
     walk_m = edge_walk_m(steps, o, d)
-    wait = route.get("wait_s")
+    wait = sum(s["wait_s"] if s.get("wait_s") is not None else WAIT_UNKNOWN_S
+               for s in steps if s["type"] in RIDE_TYPES)
     return {"time_s": ride + walk_s(walk_m) + (wait or 0), "fare": fare_of(route["fare"]),
             "walk_m": walk_m, "transfers": route.get("transfers"), "wait_s": wait}
 

@@ -73,7 +73,15 @@ function liveWaitTitle(s) {
 }
 
 // 카카오 소요 시간에는 차를 기다리는 시간이 없다(실측) — 배차로 추정한 대기를 더한 값을 옆에 작게.
-// 한 구간이라도 배차를 모르면 서버가 합을 주지 않는다(total_with_wait_s = null) → 그 경로는 지금까지처럼 시간만 보인다
+// 배차를 모르는 승차 구간에는 기본 대기를 더하고 카드·구간에 그 사실을 표시한다.
+export function defaultWaitText(route) {
+  const count = (route?.steps || []).filter((s) => ["BUS", "SUBWAY"].includes(s.type)
+    && (s.wait_source === "default" || s.wait_s == null)).length;
+  if (!count) return "";
+  return `<span class="badge warn" title="배차를 모르는 승차 구간마다 기본 대기 15분을 총 소요시간에 더했습니다.">`
+    + `실제 배차 미반영 · 기본 대기 15분 적용${count > 1 ? ` × ${count}구간` : ""}</span>`;
+}
+
 function waitText(r) {
   if (r.total_with_wait_s == null) return "";
   const day = cards?.transit?.wait_basis?.day_type;
@@ -85,6 +93,7 @@ function waitText(r) {
   const live = (r.steps || []).some((s) => isLiveWait(s.wait_source));
   const why = `기다리는 시간 ${fmtMin(r.wait_s)}을 더한 값 — `
     + (live ? "첫 승차는 실시간 도착정보, 나머지는 구간 배차의 절반으로 추정" : "구간 배차의 절반으로 추정")
+    + ((r.steps || []).some((s) => s.wait_source === "default") ? " · 배차 미확인 구간은 기본 대기 15분 적용" : "")
     + (per ? `
 구간 배차: ${per}` : "") + (basis ? `
 기준: ${basis}` : "");
@@ -300,6 +309,7 @@ function routeCardHTML(r, i) {
         <span class="rc-top"><b class="rc-type">${esc(routeLabel(r))}</b>
           <span class="rc-times"><b class="rc-time">${fmtMin(r.total_time_s)}</b>${waitText(r)}</span>${matchBadge(r.diag_summary)}</span>
         <span class="rc-meta">${esc(fareText(r.fare))} · 환승 ${esc(r.transfers ?? "–")}회 · ${fmtKm(r.total_distance_m)} · 도보 약 ${fmtDist(cards.walk[i])}</span>
+        ${defaultWaitText(r)}
         <span class="rc-chips">${chips(r)}</span>
       </button>
       <div class="rc-detail" hidden></div>
@@ -343,13 +353,13 @@ export function routeTimelineHTML(route) {
   const items = [];
   // wait = 그 지점에서 차를 기다리는 시간 — 타고 오르는 지점에만 붙는다. 보통은 배차의 절반 추정이고,
   // liveTitle 이 있으면 실시간 도착정보로 잡은 값이다(첫 승차 — 정류장까지 걷는 동안 떠나는 차는 뺀 뒤 첫 차)
-  const node = (name, end = false, wait = null, liveTitle = null) => {
+  const node = (name, end = false, wait = null, liveTitle = null, defaultWait = false) => {
     const prev = items.at(-1);
     if (!end && prev?.kind === "node" && prev.name === name) { // 도보 없이 이어 탈 때 같은 역은 한 번만
-      if (wait != null) Object.assign(prev, { wait, liveTitle });
+      if (wait != null) Object.assign(prev, { wait, liveTitle, defaultWait });
       return;
     }
-    items.push({ kind: "node", name, end, wait, liveTitle });
+    items.push({ kind: "node", name, end, wait, liveTitle, defaultWait });
   };
   const isRide = (s) => s?.type === "BUS" || s?.type === "SUBWAY";
   // 카카오가 주지 않는 첫·끝 도보. 택시가 출발지에서 떠나거나 도착지에 닿으면 그 끝에는 도보가 없다
@@ -369,7 +379,7 @@ export function routeTimelineHTML(route) {
       continue;
     }
     const stops = s.stops || [];
-    node(stops[0] ?? s.board_name ?? "?", false, s.wait_s ?? null, isLiveWait(s.wait_source) ? liveWaitTitle(s) : null);
+    node(stops[0] ?? s.board_name ?? "?", false, s.wait_s ?? null, isLiveWait(s.wait_source) ? liveWaitTitle(s) : null, s.wait_source === "default");
     items.push({ kind: "ride", s });
     node(stops.length >= 2 ? stops.at(-1) : s.alight_name ?? "?");
   }
@@ -383,6 +393,7 @@ const rail = (line = "") => `<span class="tl-rail">${line}</span>`;
 function timelineItem(it) {
   if (it.kind === "node") {
     const wait = it.wait == null ? ""
+      : it.defaultWait ? `<span class="tl-wait" title="실제 배차 미반영">기본 대기 ${fmtMin(it.wait)} · 실제 배차 미반영</span>`
       : it.liveTitle ? `<span class="tl-wait live" title="${esc(it.liveTitle)}">대기 ${fmtMin(it.wait)} · 실시간</span>`
       : `<span class="tl-wait" title="배차의 절반으로 추정한 기다리는 시간">대기 약 ${fmtMin(it.wait)}</span>`;
     return `<li class="tl-node${it.end ? " tl-end" : ""}">${rail('<span class="tl-dot"></span>')}`

@@ -183,8 +183,7 @@ async def transit_payload(st, sx, sy, ex, ey, probe=False, realtime=False):
     norm["diag_summary"] = (_diagnose(st.stops, st.routes, st.lines, norm["routes"], st.settings)
                             if st.stops else None)
     # 카카오 시간에는 대기가 없다 — 배차표가 있으면 구간마다 기다릴 시간을 더한 값도 함께 준다
-    norm["wait_basis"] = (add_wait(norm["routes"], st.headway, datetime.now(KST), st.routes)
-                          if st.headway is not None else None)
+    norm["wait_basis"] = add_wait(norm["routes"], st.headway, datetime.now(KST), st.routes)
     norm["realtime"] = None   # 첫 승차 대기 진단 — realtime · realtime_stops · realtime+headway · no_arrivals … (안 썼으면 None)
     if realtime and norm["routes"] and st.stops is not None and st.lines is not None:
         try:
@@ -210,14 +209,14 @@ HybridTmax = Annotated[int, Query(ge=3, le=40)]
 
 @router.get("/hybrid")
 async def hybrid(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat,
-                 top: HybridTop = 5, t_max: HybridTmax = 15):
+                 top: HybridTop = 5, t_max: HybridTmax = 30):
     """택시 ↔ 대중교통 연계 경로. 앵커마다 카카오를 부르므로 화면의 버튼을 눌렀을 때만 돈다. 기준 경로도 새로 부른다."""
     return await _hybrid(request, response, (sx, sy), (ex, ey), top, t_max, None)
 
 
 @router.post("/hybrid")
 async def hybrid_reuse(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat,
-                       body: Annotated[dict, Body()], top: HybridTop = 5, t_max: HybridTmax = 15):
+                       body: Annotated[dict, Body()], top: HybridTop = 5, t_max: HybridTmax = 30):
     """같은 출발·도착의 [경로 검색] 결과(화면이 들고 있는 routes)를 본문으로 받아 기준 경로로 다시 쓴다 — 대중교통 1콜을 아낀다.
 
     카카오 응답을 서버에 두지 않는 규칙은 그대로다: 본문은 이 요청을 처리하는 동안에만 쓰고 버린다(web/README.md §6).

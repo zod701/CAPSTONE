@@ -2,7 +2,7 @@
 // 서버가 앵커마다 카카오를 부르므로(대중교통·자동차) 버튼을 눌렀을 때만 받아 온다.
 // 탭·정렬·선택·펼치기는 목록이 한곳에서 한다 — 카드를 펼치면 대중교통 카드와 같은 구간 타임라인에 택시가 한 구간으로 들어간다.
 import { esc } from "./api.js";
-import { fmtMin, fmtWon, fmtDist, chips, setExtraCards } from "./routes.js";
+import { fmtMin, fmtWon, fmtDist, chips, setExtraCards, defaultWaitText } from "./routes.js";
 
 // 최소 시간 대중교통 경로(서버 기준선)와 견준 값 — 절감 시간 · 추가 요금 · 원/분(시간을 줄이지 못하면 없음). 서버의 compare.saving_per_min 과 같은 식
 function versus(r, base) {
@@ -74,6 +74,8 @@ function cardHTML(r, i, base, vot) {
         <span class="rc-top"><b class="rc-type">하이브리드</b>
           <span class="rc-times"><b class="rc-time">${fmtMin(r.time_s)}</b>
             <span class="rc-wait">${fmtWon(r.fare)}</span></span>${badge(v, vot)}</span>
+        ${defaultWaitText(r.transit)}
+        ${r.fare_info ? `<span class="rc-meta" title="${esc(r.fare_info.reason)}">${r.fare_info.source === "fallback" ? "대중교통 요금 대체값 적용 · " + esc(r.fare_info.reason) : "대중교통 요금 추정 · 성인 교통카드"}</span>` : ""}
         <span class="rc-meta">${legText(r)}</span>
         <span class="rc-meta hy-vs">${versusText(v)}</span>
         <span class="rc-chips">${chips(combinedRoute(r))}</span>
@@ -95,14 +97,13 @@ export function renderHybrid(el, data, onSelect) {
   const base = data.baseline;
   // 한 줄에는 비교 대상만 — 나머지(추천 기준 · 첫 대기 실시간 · 확인한 앵커 · 뺀 후보)는 ⓘ 에 마우스를 올리면 한 줄씩 보인다
   const notes = [
-    base.wait_s == null ? "비교 대상 시간에 대기 미포함" : null,
     `추천: 아낀 1분에 ${Math.round(data.vot).toLocaleString("ko-KR")}원 이하`,
     liveFirstWaits(data) ? `첫 대기 실시간 ${liveFirstWaits(data)}개 경로` : null,
     `앵커 ${data.diag.verified}/${data.diag.picked}개 확인`,
     data.diag.too_little_saving ? `${minSaving(data)}분 이상 빠르지 않은 ${data.diag.too_little_saving}개 뺌` : null,
   ].filter(Boolean).join("\n");
   const head = `<p class="hy-base">비교 <b>최소 시간 경로 ${fmtMin(base.time_s)}</b> · ${fmtWon(base.fare)}`
-    + ` <span class="hy-info" tabindex="0" role="img" aria-label="${esc(notes)}" title="${esc(notes)}">ⓘ</span></p>`;
+    + ` ${defaultWaitText(base.route)} <span class="hy-info" tabindex="0" role="img" aria-label="${esc(notes)}" title="${esc(notes)}">ⓘ</span></p>`;
   if (!data.routes.length) {
     const why = data.diag.too_little_saving
       ? `최소 시간 경로보다 ${minSaving(data)}분 이상 빠른 하이브리드 경로가 없습니다.` : "조건에 맞는 하이브리드 경로를 찾지 못했습니다.";
