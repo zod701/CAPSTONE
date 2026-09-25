@@ -1,7 +1,6 @@
 // 지도·배경지도·정류장/역·시군구 경계.
 import { getJSON, esc, safeColor } from "./api.js";
 
-const DATA_ATTR = "정류장: 국토교통부 · 노선: 서울 열린데이터광장·경기도 버스정보 · 역: 전국도시철도역사정보표준데이터";
 const BOUNDARY_ATTR = "행정경계: 통계청 SGIS(공공누리 1유형), 가공 vuski/admdongkor (CC BY 4.0)";
 const BUS_MIN_ZOOM = 15;
 const SUBWAY_MIN_ZOOM = 10;
@@ -30,7 +29,7 @@ export function createMap(el, { onError = () => {}, onPlaceClick = () => {} } = 
     maxBounds: [[33, 124], [39.5, 132]],
   }).setView([37.40, 127.10], 11);
 
-  const vworld = { minZoom: 6, maxZoom: 19, attribution: "© VWorld (국토교통부)" };
+  const vworld = { minZoom: 6, maxZoom: 19, attribution: "© VWorld" };
   const vw = (layer, opts = {}) => L.tileLayer(`/tiles/vworld/${layer}/{z}/{y}/{x}`, { ...vworld, ...opts });
   // 목록의 한 항목 = 밝은·어두운 타일 한 쌍 — 모드가 바뀌면 같은 항목 안에서 타일만 바뀐다.
   // 어두운 판이 있는 것은 VWorld 기본(→ midnight)뿐: OSM 은 공식 어두운 스타일이 없다
@@ -55,15 +54,15 @@ export function createMap(el, { onError = () => {}, onPlaceClick = () => {} } = 
     renderers[name] = L.svg({ pane: `${name}Pane` });
   }
 
-  const busLayer = L.layerGroup([], { attribution: DATA_ATTR }).addTo(map);
+  const busLayer = L.layerGroup().addTo(map);
   const subwayMarkers = L.layerGroup();
-  const subwayLayer = L.layerGroup([], { attribution: DATA_ATTR }).addTo(map);
+  const subwayLayer = L.layerGroup().addTo(map);
   const boundaryLayer = L.layerGroup([], { attribution: BOUNDARY_ATTR });
   const carGroup = L.layerGroup();
   const transitGroup = L.layerGroup();
   const routeLayer = L.layerGroup([carGroup, transitGroup]).addTo(map);
   const diagLayer = L.layerGroup().addTo(map);
-  const hlLayer = L.layerGroup([], { attribution: DATA_ATTR }); // 노선 강조 — 켤 때만 지도에 (노선 출처 표기 포함)
+  const hlLayer = L.layerGroup(); // 노선 강조 — 켤 때만 지도에 (데이터 출처는 정보 패널에 표기)
 
   // 레이어 목록의 하위 항목(들여 씀): 미정차 표시 ⊂ 버스 정류장, 매칭 진단 ⊂ 경로.
   // 미정차 표시는 레이어가 아니라 버스 점 거르개라 우리 체크박스를 버스 정류장 바로 아래 끼운다. Leaflet 이 목록을 다시 그려도
@@ -79,15 +78,20 @@ export function createMap(el, { onError = () => {}, onPlaceClick = () => {} } = 
       return label;
     },
   });
-  new LayersTree(bases, {
+  const layerControl = new LayersTree(bases, {
     "버스 정류장": busLayer,
     "지하철역": subwayLayer,
     "시군구 경계": boundaryLayer, // 서울 구 + 경기 시·군 (경기 일반구는 시로 합친 그대로)
     "경로": routeLayer,
     "매칭 진단": diagLayer,
-  }, { collapsed: false }).addTo(map);
+  }, { collapsed: true }).addTo(map);
+  const closeLayersOutside = (event) => {
+    if (!layerControl.getContainer().contains(event.target)) layerControl.collapse();
+  };
+  document.addEventListener("pointerdown", closeLayersOutside, true);
+  map.once("unload", () => document.removeEventListener("pointerdown", closeLayersOutside, true));
 
-  const hint = addControl(map, "bottomleft", "map-hint", "정류장을 보려면 확대하세요");
+  const hint = document.getElementById("map-hint");
 
   // --- 버스 정류장: z ≥ 15 에서 화면 범위만 ---
   let busTimer = null;
@@ -220,19 +224,6 @@ function themedBase(light, dark = light) {
     }
   };
   return group;
-}
-
-function addControl(map, position, className, html) {
-  const Box = L.Control.extend({
-    onAdd() {
-      const div = L.DomUtil.create("div", className);
-      div.innerHTML = html;
-      L.DomEvent.disableClickPropagation(div);
-      L.DomEvent.disableScrollPropagation(div);
-      return div;
-    },
-  });
-  return new Box({ position }).addTo(map).getContainer();
 }
 
 // 원 표기(도시명)와 좌표 판정 시군이 같은 곳을 가리키는지. 서울 원 표기는 "서울특별시" 뿐이다.

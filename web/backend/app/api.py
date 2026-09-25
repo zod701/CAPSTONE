@@ -258,6 +258,14 @@ KEYWORD_SIZE = 10        # 카카오 최대 15
 ADDRESS_SIZE = 5         # 카카오 최대 30. 주소는 보통 1–2건
 
 
+@router.get("/reverse-address")
+async def reverse_address(request: Request, response: Response, lon: Lon, lat: Lat):
+    st = request.app.state
+    raw = await st.kakao.reverse_address(lon, lat)
+    response.headers["Cache-Control"] = "no-store"
+    return {"address": places.reverse_address(raw), "quota": st.quota.snapshot()}
+
+
 @router.get("/search")
 async def search(request: Request, response: Response, q: str = ""):
     """주소·장소 이름 → 출발·도착 후보. 키워드·주소 검색을 동시에 부르고, 한쪽만 실패하면 다른 쪽 결과와

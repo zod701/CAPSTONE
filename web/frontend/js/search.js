@@ -1,6 +1,7 @@
 // 주소·장소 검색창 (사이드바에 하나). 입력하면 잠시 뒤 /api/search → 칸 아래 목록, 고르면 onPick(item) —
 // 출발/도착은 부르는 쪽이 정한다. 결과는 목록을 그리는 동안만 메모리에 둔다 — 캐시·저장하지 않는다(카카오 로컬 약관: 짧은 캐시도 금지).
 import { getJSON, esc } from "./api.js";
+import { readSearchHistory, rememberSearch, clearSearchHistory, isSearchHistoryEnabled, setSearchHistoryEnabled } from "./search-history.js";
 
 const DEBOUNCE_MS = 300;
 const MIN_AUTO = 2; // 이 글자 수부터 입력하는 동안 자동으로 찾는다 (Enter 는 1글자도)
@@ -15,6 +16,7 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
   let pending = null; // 서버에 보내 답을 기다리는 검색어 — 같은 검색어는 끊고 다시 보내지 않는다(끊어도 서버는 카카오를 이미 불렀다)
   let seq = 0;      // 새 입력마다 증가 — 늦게 온 이전 검색어의 결과는 버린다
   let selectOnUp = false;
+  let touchingList = false;
 
   // 목록 안 문구(role=presentation)는 화면 낭독기가 읽지 않아 목록 밖 status 영역에도 넣는다
   const status = document.createElement("p");
@@ -66,6 +68,17 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
     }
   }
 
+  function showHistory() {
+    if (input.value.trim()) return;
+    close();
+    const enabled = isSearchHistoryEnabled();
+    items = enabled ? readSearchHistory().map(query => ({ historyQuery: query })) : [];
+    shown = "";
+    open(items.map((it, i) => `<li id="${list.id}-${i}" class="ac-item" role="option" aria-selected="false" data-i="${i}"><span class="ac-name">${esc(it.historyQuery)}</span></li>`).join("")
+      + `<li class="ac-history-actions" role="presentation"><span class="ac-history-title">최근 검색어</span><button type="button" data-toggle-history>검색 기록 ${enabled ? "끄기" : "켜기"}</button><button type="button" data-clear-history>검색 기록 지우기</button></li>`,
+    enabled && items.length ? [] : [[enabled ? "검색 기록이 없습니다" : "검색 기록 저장이 꺼져 있습니다"]]);
+  }
+
   function render(q, data) {
     items = data.items || [];
     shown = q;
@@ -85,10 +98,12 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
 
   async function run(q) {
     cancel();
+    items = [];
+    shown = null;
     const my = seq;
     const c = (ctrl = new AbortController());
     pending = q;
-    if (list.hidden) open("", [["찾는 중…"]]);
+    open("", [["찾는 중…"]]);
     try {
       const data = await getJSON("/api/search", { q }, { signal: c.signal });
       if (my !== seq) return;
@@ -110,6 +125,13 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
   function pick(i) {
     const it = items[i];
     if (!it) return;
+    if (it.historyQuery) {
+      input.value = it.historyQuery;
+      rememberSearch(it.historyQuery);
+      run(it.historyQuery);
+      return;
+    }
+    if (shown) rememberSearch(shown);
     input.value = it.name;
     close();
     onPick(it);
@@ -122,6 +144,7 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
     if (q === shown) return;   // 보이는 목록이 이미 이 검색어의 결과
     if (q.length < MIN_AUTO) {
       close();
+      if (!q) showHistory();
       return;
     }
     timer = setTimeout(() => run(q), DEBOUNCE_MS);
@@ -141,6 +164,7 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
       setActive((active + step + items.length) % items.length);
     } else if (e.key === "Enter") {
       e.preventDefault();
+      if (q) rememberSearch(q);
       if (items.length && shown === q) pick(active); // 목록이 지금 검색어의 결과일 때만 고른다
       else if (q && pending !== q) run(q);          // 같은 검색어가 도는 중이면 답을 기다린다
     } else if (e.key === "Escape") {
@@ -151,7 +175,25 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
 
   // 목록을 누르는 동안 칸이 포커스를 잃지 않게 (잃으면 목록이 먼저 닫힌다)
   list.addEventListener("mousedown", (e) => e.preventDefault());
+  document.addEventListener("pointerdown", (e) => {
+    touchingList = list.contains(e.target);
+    if (!touchingList && e.target !== input) close();
+  }, true);
+  list.addEventListener("focusout", (e) => {
+    if (!list.contains(e.relatedTarget) && e.relatedTarget !== input) close();
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Tab") touchingList = false; });
   list.addEventListener("click", (e) => {
+    if (e.target.closest("[data-toggle-history]")) {
+      setSearchHistoryEnabled(!isSearchHistoryEnabled());
+      showHistory();
+      return;
+    }
+    if (e.target.closest("[data-clear-history]")) {
+      clearSearchHistory();
+      showHistory();
+      return;
+    }
     const li = e.target.closest(".ac-item");
     if (li) pick(Number(li.dataset.i));
   });
@@ -164,14 +206,16 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
   input.addEventListener("focus", () => {
     input.select();
     selectOnUp = true;
+    showHistory();
   });
+  input.addEventListener("click", () => { if (list.hidden) showHistory(); });
   input.addEventListener("mouseup", (e) => {
     if (selectOnUp) e.preventDefault();
     selectOnUp = false;
   });
-  input.addEventListener("blur", () => {
+  input.addEventListener("blur", (e) => {
     selectOnUp = false;
-    close();
+    if (!touchingList && !list.contains(e.relatedTarget)) close();
   });
 
   return { focus: () => input.focus() };

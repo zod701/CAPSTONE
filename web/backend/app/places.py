@@ -15,6 +15,15 @@ def _text(v):
     return v.strip() if isinstance(v, str) else ""
 
 
+def reverse_address(raw: dict) -> str:
+    for doc in raw.get("documents") or []:
+        for kind in ("road_address", "address"):
+            address = _text((doc.get(kind) or {}).get("address_name"))
+            if address:
+                return address
+    return ""
+
+
 def _latlon(doc):
     try:
         lon, lat = float(doc.get("x")), float(doc.get("y"))

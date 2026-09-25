@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>바로가</title>
 <script>
   // 화면 테마를 그리기 전에 정한다(밝은 화면이 번쩍이지 않게): 저장한 선택 → 없으면 운영체제 설정. 저장소엔 테마만 둔다.
@@ -17,20 +17,8 @@
 <script src="vendor/leaflet-1.9.4/leaflet.js"></script>
 <script type="module" src="js/app.js"></script>
 </head>
-<body>
-<aside id="sidebar">
-  <header class="brand">
-    <h1>바로가
-      <button id="info-btn" class="info-btn" type="button" title="데이터·API 정보" aria-label="데이터·API 정보"
-              aria-haspopup="dialog" aria-controls="info-dialog">ⓘ</button>
-    </h1>
-  </header>
-
-  <div id="banners" aria-live="polite"></div>
-
-  <section id="search">
-    <h2>검색</h2>
-    <p class="hint">검색하거나 지도에 클릭해 출발·도착지를 선택하세요</p>
+<body class="panel-collapsed">
+<div id="floating-search" role="search" aria-label="장소 검색">
     <div class="place-row">
       <div class="ac place-search">
       <input id="place-q" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="place-list"
@@ -42,6 +30,13 @@
       <button type="button" id="pick-dest" class="pin od-dest od-pick" disabled
               title="검색해서 고른 장소를 도착으로" aria-label="검색해서 고른 장소를 도착으로">도착</button>
     </div>
+    <p id="map-hint" class="map-hint" role="status">정류장을 보려면 확대하세요</p>
+</div>
+<div id="banners" aria-live="polite"></div>
+<aside id="sidebar">
+  <div id="sidebar-content">
+
+  <section id="search">
     <div class="od-fields">
       <span class="pin od-origin">출발</span>
       <div class="od-val">
@@ -61,13 +56,12 @@
     </div>
     <div class="buttons">
       <button type="button" id="btn-search" class="primary" disabled>경로 검색</button>
+      <button type="button" id="btn-hybrid" hidden disabled>하이브리드 경로 검색</button>
     </div>
   </section>
 
   <section id="results">
     <h2>경로 검색 결과</h2>
-    <!-- 택시 카드는 탭과 상관없이 늘 맨 위 — 어느 탭의 경로와도 견주기 쉽게 -->
-    <div id="car-body"></div>
     <div id="route-bar" hidden>
       <div class="rt-tabs" role="tablist" aria-label="경로 종류">
         <button type="button" class="rt-tab" role="tab" data-tab="all" aria-selected="true">전체<span class="rt-n"></span></button>
@@ -78,19 +72,21 @@
         </span>
         <button type="button" class="rt-tab" role="tab" data-tab="hybrid" aria-selected="false">하이브리드<span class="rt-n"></span></button>
       </div>
-      <label class="rt-sort">정렬 <select id="route-sort"></select></label>
+      <label class="rt-sort"><select id="route-sort" aria-label="정렬"></select></label>
     </div>
-    <!-- 하이브리드: 버튼과 기준선 요약만. 카드는 아래 목록에 대중교통 경로와 섞여 들어간다 -->
+    <div id="route-cards">
+    <div id="car-body"></div>
+    <!-- 하이브리드 요약. 카드는 아래 목록에 대중교통 경로와 섞여 들어간다 -->
     <div id="hybrid" hidden>
       <div class="hy-run">
-        <button type="button" id="btn-hybrid" disabled>하이브리드 경로 찾기</button>
         <small>택시로 갈아탈 지점을 찾아 확인합니다 (카카오 호출 최대 24건)</small>
       </div>
       <div id="hybrid-body"></div>
     </div>
     <div id="transit-body"></div>
-  </section>
 
+  <details id="developer-tools">
+    <summary>개발자</summary>
   <section id="diag">
     <details>
       <summary>매칭 진단</summary>
@@ -118,7 +114,17 @@
       <div id="quota-body"><p class="muted">불러오는 중…</p></div>
     </details>
   </section>
+  </details>
+    </div>
+  </section>
+  </div>
+  <footer class="panel-footer">
+    <button id="info-btn" class="info-btn" type="button" title="데이터·API 정보" aria-label="데이터·API 정보"
+            aria-haspopup="dialog" aria-controls="info-dialog">ⓘ</button>
+  </footer>
 </aside>
+<button id="panel-handle" type="button" aria-expanded="false" aria-controls="sidebar-content"
+        aria-label="검색·결과 패널 열기"><span aria-hidden="true">›</span></button>
 <main id="map" aria-label="지도"></main>
 
 <dialog id="info-dialog" class="info-dialog" aria-labelledby="info-title">

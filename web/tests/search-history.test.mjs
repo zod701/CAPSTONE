@@ -1,0 +1,32 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { readFileSync } from 'node:fs';
+
+test('recent queries persist, deduplicate, limit to ten and clear safely', () => {
+  const stored = new Map();
+  const storage = { getItem: key => stored.get(key) ?? null, setItem: (key, value) => stored.set(key, value), removeItem: key => stored.delete(key) };
+  const source = readFileSync(new URL('../frontend/js/search-history.js', import.meta.url), 'utf8').replaceAll('export function', 'function');
+  const create = () => { const c = vm.createContext({ localStorage: storage }); vm.runInContext(source, c); return c; };
+  const c = create();
+  for (let i = 0; i < 12; i++) c.rememberSearch(`장소 ${i}`);
+  c.rememberSearch(' 장소 5 ');
+  const loaded = create().readSearchHistory();
+  assert.equal(loaded.length, 10);
+  assert.equal(loaded[0], '장소 5');
+  assert.equal(loaded.filter(q => q === '장소 5').length, 1);
+  c.setSearchHistoryEnabled(false);
+  const reloaded = create();
+  assert.equal(reloaded.isSearchHistoryEnabled(), false);
+  reloaded.rememberSearch('저장하지 않을 검색어');
+  assert.equal(reloaded.readSearchHistory()[0], '장소 5');
+  reloaded.setSearchHistoryEnabled(true);
+  reloaded.rememberSearch('다시 저장');
+  assert.equal(reloaded.readSearchHistory()[0], '다시 저장');
+  c.clearSearchHistory();
+  assert.equal(c.readSearchHistory().length, 0);
+  stored.set('baroga-search-history', '{broken');
+  assert.equal(c.readSearchHistory().length, 0);
+  storage.setItem = () => { throw new Error('blocked'); };
+  assert.doesNotThrow(() => c.rememberSearch('서울역'));
+});

@@ -15,6 +15,7 @@ TRANSIT_URL = "https://dapi.kakao.com/v2/routing/publictraffic"
 CAR_URL = "https://apis-navi.kakaomobility.com/v1/directions"
 KEYWORD_URL = "https://dapi.kakao.com/v2/local/search/keyword.json"
 ADDRESS_URL = "https://dapi.kakao.com/v2/local/search/address.json"
+REVERSE_ADDRESS_URL = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
 
 _SECRET = re.compile(
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32}")
@@ -88,6 +89,9 @@ class KakaoClient:
     async def address(self, query, size) -> dict:
         """주소 검색 (size 1–30). 장소 이름에는 0건이다."""
         return await self._get("address", ADDRESS_URL, {"query": query, "size": size})
+
+    async def reverse_address(self, lon, lat) -> dict:
+        return await self._get("address", REVERSE_ADDRESS_URL, {"x": lon, "y": lat})
 
     async def _get(self, kind, url, params):
         if not self.rest_key:

@@ -2,7 +2,7 @@
 // 서버가 앵커마다 카카오를 부르므로(대중교통·자동차) 버튼을 눌렀을 때만 받아 온다.
 // 탭·정렬·선택·펼치기는 목록이 한곳에서 한다 — 카드를 펼치면 대중교통 카드와 같은 구간 타임라인에 택시가 한 구간으로 들어간다.
 import { esc } from "./api.js";
-import { fmtMin, fmtWon, fmtDist, chips, setExtraCards, defaultWaitText } from "./routes.js";
+import { fmtMin, fmtWon, chips, setExtraCards, defaultWaitText } from "./routes.js";
 
 // 최소 시간 대중교통 경로(서버 기준선)와 견준 값 — 절감 시간 · 추가 요금 · 원/분(시간을 줄이지 못하면 없음). 서버의 compare.saving_per_min 과 같은 식
 function versus(r, base) {
@@ -27,24 +27,8 @@ function badge({ wonPerMin }, vot) {
 // 어디서 갈아타고 무엇을 타는지 — A 는 택시로 앵커까지, B 는 앵커까지 대중교통,
 // D 는 기준 경로 한가운데의 공백(긴 대기·긴 환승 도보) 한 구간만 택시로 건너뛴다(anchor.name = "타는 곳→내리는 곳")
 function legText(r) {
-  const taxi = `택시 ${fmtMin(r.taxi.duration_s)} · ${fmtDist(r.taxi.distance_m)}`;
-  if (r.hybrid === "D") {
-    const [from, to] = String(r.anchor.name || "→").split("→");
-    const skip = r.gap?.kind === "walk" ? `환승 도보 ${fmtMin(r.gap.removed_s)} 대신`
-      : `${r.ride_name ? `${esc(String(r.ride_name))} ` : ""}대기·승차 ${fmtMin(r.gap?.removed_s)} 대신`;
-    return `${esc(from)} → ${esc(to)} ${taxi} (${skip})`;
-  }
-  // C 는 기준 경로가 목적지에서 멀어지기 시작하는 정류장에서 내린다 — 택시로 목적지까지, 또는 곧장 가는 노선을 다시 탄다
-  if (r.hybrid === "C") {
-    const at = esc(r.detour?.point_name || "정류장");
-    const loop = r.detour?.loop_s ? ` (돌아가는 ${fmtMin(r.detour.loop_s)} 대신)` : "";
-    if (r.detour?.via === "taxi_to_d") return `${at}에서 내려 ${taxi} → 목적지${loop}`;
-    const to = String(r.anchor.name || "→").split("→")[1] || "앵커";
-    return `${at}에서 내려 ${taxi} → ${esc(to)}에서 다시 대중교통${loop}`;
-  }
-  const transit = `대중교통 ${fmtMin(r.transit_time_s)}${r.ride_name ? ` · ${esc(String(r.ride_name))}` : ""}`;
-  const at = `${esc(r.anchor.name || "앵커")}에서 갈아탐`;
-  return r.hybrid === "A" ? `${taxi} → ${at} → ${transit}` : `${transit} → ${at} → ${taxi}`;
+  const distance = r.taxi.distance_m == null ? "–" : `${(r.taxi.distance_m / 1000).toFixed(1)} km`;
+  return `대중교통 ${fmtMin(r.transit_time_s)} · 택시 ${fmtMin(r.taxi.duration_s)} · ${distance}`;
 }
 
 // 대중교통 구간 사이에 택시를 한 구간(TAXI)으로 끼운 경로 — 타임라인·칩이 대중교통 카드와 같은 코드로 그린다.

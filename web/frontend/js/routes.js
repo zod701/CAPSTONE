@@ -146,8 +146,8 @@ function stepStyle(s) {
 }
 
 function matchBadge(s) {
-  if (!s) return "";
-  const cls = s.unmatched ? "bad" : s.ambiguous ? "warn" : "ok";
+  if (!s || (!s.unmatched && !s.ambiguous)) return "";
+  const cls = s.unmatched ? "bad" : "warn";
   const title = `모호 ${s.ambiguous} · 미매칭 ${s.unmatched} · 건너뜀 ${s.skipped}`;
   return `<span class="badge ${cls}" title="${title}">매칭 ${s.matched}/${s.n - s.skipped}</span>`;
 }
@@ -240,13 +240,13 @@ const numOr = (x) => (typeof x === "number" && Number.isFinite(x) ? x : Infinity
 
 // 경로 목록을 그리고, 보이는 첫 경로를 고른다(onSelect). 카드의 data-i 는 transit.routes 의 원래 번호.
 // group·sort 는 결과 머리의 탭·정렬(탭 전환은 setRouteView). origin·dest(검색한 출발·도착)는 첫·끝 도보 거리 추정에 쓴다.
-export function renderRouteCards(el, transit, onSelect, { origin = null, dest = null, group = null, sort = SORTS[0][0] } = {}) {
+export function renderRouteCards(el, transit, onSelect, { origin = null, dest = null, group = null, sort = SORTS[0][0], autoSelect = true } = {}) {
   cards = { el, transit, onSelect, walk: transit.routes.map((r) => walkMeters(r, origin, dest)),
     group, sort, expanded: null, selected: null, extras: [] };
   el.innerHTML = '<div class="rt-list"></div>';
   drawCards();
   const first = visibleEntries().find((e) => e.kind === "t");
-  if (first) onSelect(first.i);
+  if (first && autoSelect) onSelect(first.i);
 }
 
 // 하이브리드 경로에 있는 정렬 기준 — 거리·환승·도보는 값이 없어 맨 뒤로 간다(기준이 없으면 맨 뒤)
@@ -282,12 +282,12 @@ function drawCards() {
     const key = card.dataset.key;
     card.querySelector(".rc-head").addEventListener("click", () => {
       const wasOpen = card.classList.contains("expanded");
-      if (!card.classList.contains("selected")) selectEntry(key); // 지도에 그리기 (이미 선택된 카드면 다시 맞추지 않음)
+      if (!card.classList.contains("selected") || matchMedia("(max-width: 720px)").matches) selectEntry(key);
       expandCard(wasOpen ? null : key);
     });
   }
   paintSelected();
-  if (shown.some((e) => e.key === cards.expanded)) expandCard(cards.expanded);
+  if (shown.some((e) => e.key === cards.expanded)) expandCard(cards.expanded, false);
   else cards.expanded = null;
 }
 
@@ -317,18 +317,41 @@ function routeCardHTML(r, i) {
 }
 
 // 카드 하나만 펼친다(key, 없으면 null). 펼칠 때 처음 한 번만 구간 타임라인을 만든다 — 하이브리드는 택시를 끼운 경로로.
-function expandCard(key) {
+const detailAnimations = new WeakMap();
+function expandCard(key, animate = true) {
   cards.expanded = key;
   for (const card of cards.el.querySelectorAll(".route-card")) {
     const open = card.dataset.key === key;
     const detail = card.querySelector(".rc-detail");
+    const wasOpen = card.classList.contains("expanded");
     if (open && !detail.childElementCount) {
       const { kind, i } = entryOf(key);
       fillTimeline(detail, kind === "t" ? cards.transit.routes[i] : cards.extras[i].route);
     }
     card.classList.toggle("expanded", open);
     card.querySelector(".rc-head").setAttribute("aria-expanded", String(open));
-    detail.hidden = !open;
+    const previous = detailAnimations.get(detail);
+    const from = detail.hidden ? 0 : detail.getBoundingClientRect().height;
+    previous?.cancel();
+    detailAnimations.delete(detail);
+    detail.inert = !open;
+    if (!animate || wasOpen === open || !detail.animate || matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      detail.hidden = !open;
+      continue;
+    }
+    detail.hidden = false;
+    const to = open ? detail.getBoundingClientRect().height : 0;
+    const animation = detail.animate([
+      { height: `${from}px`, paddingTop: from ? "2px" : "0px", paddingBottom: from ? "8px" : "0px", borderTopWidth: from ? "1px" : "0px" },
+      { height: `${to}px`, paddingTop: open ? "2px" : "0px", paddingBottom: open ? "8px" : "0px", borderTopWidth: open ? "1px" : "0px" },
+    ], { duration: 220, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)", fill: "both" });
+    detailAnimations.set(detail, animation);
+    animation.onfinish = () => {
+      if (detailAnimations.get(detail) !== animation) return;
+      detail.hidden = !open;
+      animation.cancel();
+      detailAnimations.delete(detail);
+    };
   }
 }
 
@@ -595,7 +618,7 @@ export function clearCar() {
   syncAttribution();
 }
 
-// 택시 카드: 대중교통 카드처럼 누르면 지도에 경로를 켜고, 다시 누르면 끈다(대중교통 선택과 따로). 처음엔 꺼짐.
+// 택시 카드: 누르면 지도에 경로를 켜고, 다시 누르면 끈다. 처음엔 꺼짐.
 export function renderCarCard(el, car, onToggle) {
   if (car.result_code == null || Number(car.result_code) !== 0) {
     el.innerHTML = `<p class="note">자동차 경로를 찾지 못했습니다: ${esc(car.result_msg || "사유 미상")}`

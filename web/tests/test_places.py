@@ -2,7 +2,15 @@
 import json
 from pathlib import Path
 
-from app.places import address_items, merge, place_items
+from app.places import address_items, merge, place_items, reverse_address
+
+
+def test_reverse_address_prefers_road_then_land_lot():
+    assert reverse_address({"documents": [{"road_address": {"address_name": "합성로 12"},
+                                           "address": {"address_name": "합성동 1"}}]}) == "합성로 12"
+    assert reverse_address({"documents": [{"road_address": None,
+                                           "address": {"address_name": "합성동 1"}}]}) == "합성동 1"
+    assert reverse_address({"documents": []}) == ""
 
 FIX = Path(__file__).parent / "fixtures"
 KEYWORD = json.loads((FIX / "keyword_synthetic.json").read_text(encoding="utf-8"))

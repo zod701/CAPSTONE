@@ -7,6 +7,9 @@ import { renderHybrid } from "./hybrid.js";
 import { createPlaceSearch } from "./search.js";
 import { initStopRoutes, stopRoutesSection } from "./stoproutes.js";
 import { initTooltips } from "./tooltip.js";
+import { initLocation } from "./location.js";
+import { initPanelHandle } from "./panel.js";
+import { initMapLongPress } from "./longpress.js";
 
 const $ = (id) => document.getElementById(id);
 const CONSOLE_URL = "https://developers.kakao.com/console/app";
@@ -82,6 +85,24 @@ function setMsg(id, text, cls = "muted") {
 const view = createMap($("map"), { onError: (err) => showBanner(err), onPlaceClick: (p) => openOdMenu(p.latlng, p) });
 R.initRoutes(view);
 initStopRoutes(view);
+initLocation(view.map, (latlng) => {
+  document.activeElement?.blur();
+  openOdMenu(latlng, { name: "현재 위치" });
+});
+
+let panelMapOffset = 0;
+function updateMapLayout() {
+  view.map.invalidateSize({ pan: true, animate: false });
+  const offset = !matchMedia("(max-width: 720px)").matches && !document.body.classList.contains("panel-collapsed")
+    ? $("sidebar").getBoundingClientRect().right / 2 : 0;
+  if (offset !== panelMapOffset) view.map.panBy([panelMapOffset - offset, 0], { animate: false });
+  panelMapOffset = offset;
+}
+const panel = initPanelHandle($("panel-handle"), updateMapLayout);
+new ResizeObserver(() => {
+  document.body.style.setProperty("--mobile-panel-height", `${$("sidebar").getBoundingClientRect().height}px`);
+}).observe($("sidebar"));
+new ResizeObserver(updateMapLayout).observe($("map"));
 
 function odIcon(role) {
   return L.divIcon({ className: `od-marker od-${role}`, html: OD_LABEL[role], iconSize: [40, 24], iconAnchor: [20, 30] });
@@ -103,10 +124,23 @@ function showLabel(role, text) {
   el.title = text;
 }
 
-// label = 출발·도착 옆에 보일 이름 (검색 결과·정류장 이름). 없으면 좌표
+const addressRequests = { origin: 0, dest: 0 };
+async function resolvePointAddress(role, latlng, requestId) {
+  try {
+    const result = await getJSON("/api/reverse-address", { lon: latlng.lng, lat: latlng.lat });
+    if (result.quota) renderQuota(result.quota);
+    if (addressRequests[role] === requestId && result.address) showLabel(role, result.address);
+  } catch {
+    // 주소가 없는 지점이나 조회 실패 시에도 좌표로 경로 검색은 계속할 수 있다.
+  }
+}
+
+// 검색 결과·정류장 이름은 유지하고, 임의의 좌표는 주소로 변환한다.
 function setPoint(role, latlng, label = null) {
+  const requestId = ++addressRequests[role];
   state[role] = latlng;
   showLabel(role, latlng ? label || fmtLL(latlng) : "");
+  if (latlng && (!label || label === fmtLL(latlng))) resolvePointAddress(role, latlng, requestId);
   const m = state.markers[role];
   if (!latlng) {
     if (m) m.remove();
@@ -116,8 +150,7 @@ function setPoint(role, latlng, label = null) {
   } else {
     const mk = L.marker(latlng, { draggable: true, icon: odIcon(role), title: OD_LABEL[role] }).addTo(view.map);
     mk.on("dragend", () => {
-      state[role] = mk.getLatLng();
-      showLabel(role, fmtLL(state[role])); // 옮긴 자리는 이름이 없다
+      setPoint(role, mk.getLatLng());
       invalidate();
     });
     // 리스너가 없으면 클릭이 지도로 가서 아이콘(점 위쪽) 자리에 메뉴가 뜬다 — 마커 점에 띄운다(끌기 뒤 클릭은 Leaflet 이 무시)
@@ -177,11 +210,13 @@ function update() {
   // 한 번 찾으면 출발·도착이 바뀔 때까지 잠근다 — 같은 조건으로 다시 찾으면 쿼터만 쓴다(실패했으면 다시 시도할 수 있게 둔다)
   hy.disabled = state.busy || state.hybridBusy || !!state.hybrid || !(state.origin && state.dest);
   hy.textContent = state.hybridBusy ? "앵커 확인 중…"
-    : state.hybrid ? `하이브리드 경로 찾음 (${state.hybrid.routes.length}개)` : "하이브리드 경로 찾기";
+    : state.hybrid ? `하이브리드 경로 검색 완료 (${state.hybrid.routes.length}개)` : "하이브리드 경로 검색";
 }
 
 // keepHybrid — 같은 출발·도착으로 다시 검색할 때 찾은 하이브리드는 남긴다(버튼도 잠근 채)
-function clearResults({ keepHybrid = false } = {}) {
+function clearResults({ keepHybrid = false, pointChanged = false } = {}) {
+  $("btn-hybrid").hidden = true;
+  panel.reset({ pointChanged });
   state.transit = null;
   state.selectedIdx = null;
   state.car = null;
@@ -196,7 +231,7 @@ function clearResults({ keepHybrid = false } = {}) {
   $("route-bar").hidden = true;
   $("hybrid").hidden = true;
   setMsg("transit-body", "출발지와 도착지를 지정한 뒤 [경로 검색]을 누르세요.");
-  if (!keepHybrid) setMsg("hybrid-body", "[하이브리드 경로 찾기]를 누르면 택시로 갈아탈 지점을 찾습니다.");
+  if (!keepHybrid) setMsg("hybrid-body", "[하이브리드 경로 검색]을 누르면 택시로 갈아탈 지점을 찾습니다.");
   R.renderDiagnostics($("diag-body"), null, null);
   renderProbe(null);
 }
@@ -205,7 +240,7 @@ function clearResults({ keepHybrid = false } = {}) {
 function invalidate() {
   seq++;
   state.busy = false;
-  clearResults();
+  clearResults({ pointChanged: true });
   update();
 }
 
@@ -227,7 +262,7 @@ function openOdMenu(latlng, place = null, label = null) {
     ? `<div class="odm-head">${mark}<b>${esc(place.name)}</b>`
       + (place.info ? '<button type="button" class="odm-i" aria-label="정류장 정보">ⓘ</button>' : "") + "</div>"
       + (place.info ? `<div class="odm-card pop" hidden>${place.info}</div>` : "")
-    : "")
+    : `<div class="odm-head"><b class="odm-address" aria-live="polite">${esc(label || "주소 확인 중…")}</b></div>`)
     + `<div class="odm-btns">${["origin", "dest"].map((r) =>
       `<button type="button" class="pin od-${r}" data-role="${r}">${OD_LABEL[r]}</button>`).join("")}</div>`;
   if (place?.busKey) box.append(stopRoutesSection(place.busKey, latlng)); // 버스 정류장: 경유 노선 칩
@@ -243,6 +278,7 @@ function openOdMenu(latlng, place = null, label = null) {
     const card = box.querySelector(".odm-card");
     const show = (on) => {
       card.hidden = !on;
+      info.setAttribute("aria-expanded", String(on));
       if (!on) return;
       // 메뉴 오른쪽에, 지도 오른쪽 끝을 넘으면 왼쪽에 — 그래도 넘치면 지도 안으로 밀어 넣는다.
       // 카드는 pointer-events: none 이라 ⓘ 를 덮어도 마우스가 ⓘ 에서 떨어지지 않는다(깜빡임 없음)
@@ -256,14 +292,43 @@ function openOdMenu(latlng, place = null, label = null) {
       card.style.left = `${Math.round(x - o.left)}px`;
       card.style.top = `${Math.round(y - o.top)}px`;
     };
-    for (const [ev, on] of [["mouseenter", true], ["mouseleave", false], ["focus", true], ["blur", false]]) {
-      info.addEventListener(ev, () => show(on));
-    }
+    info.setAttribute("aria-expanded", "false");
+    info.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") show(true); });
+    info.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") show(false); });
+    info.addEventListener("click", () => show(card.hidden));
+    info.addEventListener("keydown", (e) => { if (e.key === "Escape") show(false); });
+    info.addEventListener("blur", () => show(false));
   }
   // 열 때는 지도를 밀지 않는다 — 가장자리 첫 클릭에 지도가 밀리면 더블클릭의 둘째 클릭이 메뉴 버튼을 누를 수 있다.
   // 더블클릭이 끝날 시간이 지나도 열려 있으면 그때 메뉴가 다 보이게 민다(가장자리에서 잘리지 않게).
   const popup = L.popup({ className: "odm-popup", maxWidth: 240, autoPan: false, autoPanPadding: [16, 16] })
     .setLatLng(latlng).setContent(box).openOn(view.map);
+  if (info) {
+    const closeInfoOutside = (event) => {
+      if (!info.contains(event.target)) {
+        box.querySelector(".odm-card").hidden = true;
+        info.setAttribute("aria-expanded", "false");
+      }
+    };
+    document.addEventListener("pointerdown", closeInfoOutside, true);
+    popup.once("remove", () => document.removeEventListener("pointerdown", closeInfoOutside, true));
+  }
+  if (!place && (!label || label === fmtLL(latlng))) {
+    const address = box.querySelector(".odm-address");
+    getJSON("/api/reverse-address", { lon: latlng.lng, lat: latlng.lat }).then((result) => {
+      if (result.quota) renderQuota(result.quota);
+      if (!popup.isOpen()) return;
+      label = result.address || null;
+      address.textContent = label || `주소 없음 · ${fmtLL(latlng)}`;
+      const focused = box.contains(document.activeElement) ? document.activeElement : null;
+      popup.update();
+      focused?.focus({ preventScroll: true });
+    }).catch(() => {
+      if (!popup.isOpen()) return;
+      address.textContent = `주소 확인 실패 · ${fmtLL(latlng)}`;
+      popup.update();
+    });
+  }
   // update 는 내용을 떼었다 다시 붙여 메뉴 안의 포커스가 풀린다 — 되살린다(검색 결과로 연 메뉴는 [출발]에 포커스가 있다)
   setTimeout(() => {
     if (!popup.isOpen()) return;
@@ -275,8 +340,8 @@ function openOdMenu(latlng, place = null, label = null) {
   return box;
 }
 
-view.map.on("click", (e) => openOdMenu(e.latlng));
-view.map.on("dblclick", () => view.map.closePopup()); // 더블클릭 확대의 첫 클릭이 연 메뉴를 남기지 않는다
+const cancelMapPress = initMapLongPress($("map"), (event) => openOdMenu(view.map.mouseEventToLatLng(event)));
+view.map.on("movestart zoomstart", cancelMapPress);
 
 $("btn-swap").addEventListener("click", () => {
   const { origin, dest } = state;
@@ -312,6 +377,7 @@ async function search() {
   update();
   setMsg("transit-body", "조회 중…");
   setMsg("car-body", "조회 중…");
+  panel.showResults();
 
   const o = state.origin;
   const d = state.dest;
@@ -327,6 +393,7 @@ async function search() {
     showTransit(t);
     if (state.hybrid) drawHybrid(); // 목록에 다시 섞는다
     showResultsBar();
+    $("btn-hybrid").hidden = false;
   }
   refreshQuota();
 }
@@ -371,13 +438,14 @@ function applyTab() {
   if (state.tab === "hybrid") return; // 하이브리드 탭은 카드를 누르기 전까지 지도를 바꾸지 않는다
   // 지도의 경로가 이 탭에 없으면 탭의 첫 경로로 — 전체 탭에서는 고른 하이브리드를 그대로 둔다
   const keepHybrid = state.tab === "all" && state.hybridIdx != null;
-  if (!keepHybrid && shown.length && !shown.includes(state.selectedIdx)) selectRoute(shown[0]);
+  if (!matchMedia("(max-width: 720px)").matches && !keepHybrid && shown.length && !shown.includes(state.selectedIdx)) selectRoute(shown[0]);
 }
 
 for (const b of document.querySelectorAll("#route-bar .rt-tab")) {
   b.addEventListener("click", () => {
     state.tab = b.dataset.tab;
     applyTab();
+    if (state.tab === "hybrid" && !state.hybrid) runHybrid();
   });
 }
 
@@ -398,7 +466,8 @@ function showTransit(res) {
   }
   // 결과 머리의 탭·정렬로 그리고 보이는 첫 경로를 고른다. 출발·도착은 첫·끝 도보 거리 추정용
   R.renderRouteCards(body, t, selectRoute, { origin: state.origin, dest: state.dest,
-    group: state.tab === "all" ? null : state.tab, sort: state.sort });
+    group: state.tab === "all" ? null : state.tab, sort: state.sort,
+    autoSelect: !matchMedia("(max-width: 720px)").matches });
 }
 
 function selectRoute(i) {
@@ -406,11 +475,23 @@ function selectRoute(i) {
   const route = t?.routes?.[i];
   if (!route) return;
   state.selectedIdx = i;
+  state.carOn = false;
+  R.markCarSelected($("car-body"), false);
+  R.clearCar();
   dropHybrid(); // 하이브리드는 지도의 두 층(대중교통·택시)을 함께 쓴다 — 한 번에 하나만 그린다
   R.markSelected($("transit-body"), i);
-  R.drawRoute(route, state.origin, state.dest);
-  R.drawDiagnostics(route);
-  R.renderDiagnostics($("diag-body"), t, route);
+  panel.showSelection(() => {
+    R.drawRoute(route, state.origin, state.dest);
+    R.drawDiagnostics(route);
+    R.renderDiagnostics($("diag-body"), t, route);
+    revealSelectedCard();
+  });
+}
+
+function revealSelectedCard() {
+  if (!matchMedia("(max-width: 720px)").matches) return;
+  const card = $("route-cards").querySelector(".route-card.selected");
+  if (card) $("route-cards").scrollTop += card.getBoundingClientRect().top - $("route-cards").getBoundingClientRect().top;
 }
 
 // --- 대중교통+택시 (하이브리드) ---
@@ -418,6 +499,9 @@ function selectRoute(i) {
 // 버튼을 눌렀을 때만 부른다 — 서버가 앵커마다 카카오를 부르므로 쿼터를 크게 쓴다
 async function runHybrid() {
   if (state.busy || state.hybridBusy || state.hybrid || !state.origin || !state.dest) return;
+  state.tab = "hybrid";
+  panel.showResults();
+  showResultsBar();
   const my = seq;
   state.hybridBusy = true;
   update();
@@ -460,8 +544,11 @@ function selectHybrid(i) {
   R.clearTransit();
   const at = L.latLng(r.anchor.lat, r.anchor.lon);
   const [from, to] = r.hybrid === "A" ? [at, state.dest] : r.hybrid === "B" ? [state.origin, at] : [state.origin, state.dest];
-  if (r.transit) R.drawRoute(r.transit, from, to);
-  R.drawCar(r.taxi, { fit: true });
+  panel.showSelection(() => {
+    if (r.transit) R.drawRoute(r.transit, from, to);
+    R.drawCar(r.taxi, { fit: true });
+    revealSelectedCard();
+  });
 }
 
 // 대중교통·택시를 고르면 하이브리드 표시를 거둔다 (지도에 한 경로만 남게)
@@ -483,12 +570,18 @@ function showCar(res) {
   R.renderCarCard(body, car, toggleCar); // 처음엔 꺼짐 — 카드를 눌러야 지도에 그린다
 }
 
-// 택시 경로 켜기/끄기 — 대중교통 경로 선택과 따로라 둘 다 켤 수 있다
+// 택시도 다른 경로와 하나만 선택한다. 다시 누르면 선택을 해제한다.
 function toggleCar() {
   dropHybrid();
+  state.selectedIdx = null;
+  R.markSelectedKey(null);
+  R.clearTransit();
   state.carOn = !state.carOn;
   R.markCarSelected($("car-body"), state.carOn);
-  if (state.carOn) R.drawCar(state.car, { fit: true });
+  if (state.carOn) panel.showSelection(() => {
+    R.drawCar(state.car, { fit: true });
+    revealSelectedCard();
+  });
   else R.clearCar();
 }
 
@@ -568,7 +661,9 @@ const themeBtn = (() => {
       return b;
     },
   });
-  return new Ctl({ position: "bottomright" }).addTo(view.map).getContainer();
+  const button = new Ctl({ position: "topright" }).addTo(view.map).getContainer();
+  button.parentElement.prepend(button);
+  return button;
 })();
 
 function showThemeButton(dark) {
