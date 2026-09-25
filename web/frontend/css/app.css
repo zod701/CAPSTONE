@@ -287,6 +287,34 @@ small { color: var(--muted); }
 .tl { list-style: none; margin: 6px 0 0; padding: 0; }
 .tl > li { display: grid; grid-template-columns: 16px 1fr; column-gap: 8px; }
 .tl-rail { position: relative; display: flex; justify-content: center; }
+.route-progress { position: absolute; left: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); border-radius: 50%; background: #1976d2; border: 2px solid #fff; box-shadow: 0 0 0 4px #1976d244; z-index: 2; pointer-events: none; }
+.route-progress-status { margin: 4px 0 8px; color: var(--muted); font-size: 12px; }
+.mobile-arrivals { display: none; }
+.route-remaining { margin-left: 8px; font-size: 12px; font-weight: 400; color: var(--muted); }
+.arrivals-dialog { width: min(480px, calc(100vw - 24px)); max-height: 75dvh; box-sizing: border-box; border: 1px solid var(--line); border-radius: 16px; padding: 16px; background: var(--surface); color: var(--ink); }
+.arrivals-dialog::backdrop { background: #0007; }
+.arrivals-dialog header { display: flex; align-items: center; justify-content: space-between; }
+.arrivals-dialog button { min-width: 44px; min-height: 44px; border: 0; background: none; color: inherit; font-size: 24px; }
+.arrivals-dialog section { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.arrivals-dialog small { display: block; color: var(--muted); }
+.arrivals-dialog .arrival-headway { display: inline; margin-left: 8px; }
+.arrival-group { margin-top: 16px; padding: 12px; border-top: 2px solid var(--line); }
+.arrival-group h3 { margin: 0 0 8px; font-size: 13px; }
+.arrival-recommended { border: 1px solid var(--accent); border-radius: 8px; background: var(--sel-bg); }
+.arrival-soon { display: inline-block; padding: 2px 6px; border: 1px solid #e55353; border-radius: 5px; background: #c6282820; color: #e55353; }
+.route-card.selected .mobile-arrivals { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; }
+.mobile-arrivals > button { min-height: 44px; border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; color: var(--ink); background: var(--surface); }
+.arrival-link { min-height: 0; border: 0; background: none; color: var(--accent); padding: 0; font-family: inherit; line-height: inherit; text-decoration: underline; cursor: pointer; }
+.route-card.selected .arrival-old-wait { display: none; }
+.route-card.selected .arrival-link { display: inline; margin-left: 8px; vertical-align: baseline; font-weight: 400; }
+.route-card.selected .vehicle-arrival { display: inline; font-size: 11px; color: var(--muted); }
+.route-card.selected .vehicle-arrival.live { color: var(--accent); }
+.route-card.selected .vehicle-arrival.arrival-soon { color: #e55353; }
+.route-card.selected .tl-node:first-child .tl-name { display: flex; align-items: center; gap: 8px; }
+.route-card.selected .arrival-refresh { display: inline-flex; margin-left: auto; justify-content: flex-end; flex-wrap: nowrap; }
+.arrival-refresh > button { width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 50%; font-size: 25px; line-height: 1; cursor: pointer; }
+.arrival-refresh > button:disabled { opacity: 0.5; cursor: wait; }
+.arrival-refresh > span { color: var(--muted); font-size: 11px; font-weight: 400; }
 .tl-node .tl-rail { align-items: center; }
 .tl-node .tl-rail::before { /* 점 뒤를 지나는 옅은 연결선 — 처음·끝 점에서는 반만 */
   content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 2px; margin-left: -1px; background: var(--rail);
@@ -301,7 +329,7 @@ small { color: var(--muted); }
 .tl-name { font-weight: 600; padding: 2px 0; }
 /* 타고 오르는 지점의 기다리는 시간 (배차의 절반 추정) */
 .tl-wait { margin-left: 6px; font-weight: 400; font-size: 11px; color: var(--muted); white-space: nowrap; }
-.tl-wait.live { color: var(--ok); }   /* 실시간 도착정보로 잡은 대기 */
+.tl-wait.live { color: var(--accent); }   /* 실시간 도착정보로 잡은 대기 */
 .tl-end .tl-name { color: var(--accent); }
 .tl-line { width: 4px; min-height: 22px; border-radius: 2px; background: var(--rail-strong); }
 .tl-walk .tl-line { width: 0; border-radius: 0; background: none; border-left: 3px dotted var(--walk); }
@@ -347,6 +375,11 @@ small { color: var(--muted); }
   word-break: keep-all; overflow-wrap: anywhere;
 }
 .strip-end .strip-name { font-weight: 700; }
+.strip-snake { position: relative; }
+.strip-progress { position: absolute; transform: translate(-50%, -100%); margin-top: -6px; padding: 1px 5px; border-radius: 8px; background: #1976d2; color: white; border: 1px solid white; font-size: 10px; white-space: nowrap; pointer-events: none; z-index: 2; }
+@media (max-width: 720px) {
+  .strip-snake { padding-top: 20px; }
+}
 .rc-top, .rc-meta, .rc-chips { display: block; }
 /* 좁아지면 줄을 바꾼다 — '버스+지하철' 처럼 이름이 길어도 시간이 세로로 쪼개지지 않게 */
 .rc-top { display: flex; align-items: center; gap: 4px 8px; flex-wrap: wrap; }
@@ -623,6 +656,8 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 ::view-transition-group(panel-map) { z-index: 0; }
 ::view-transition-group(panel-shell), ::view-transition-group(floating-search) { z-index: 1; }
 ::view-transition-group(panel-handle) { z-index: 2; }
+::view-transition-old(panel-handle) { display: none; }
+::view-transition-new(panel-handle) { animation: none; mix-blend-mode: normal; }
 ::view-transition-new(panel-shell) { animation: panel-in 280ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 ::view-transition-old(panel-shell) { animation: panel-out 280ms cubic-bezier(0.22, 1, 0.36, 1) both; }
 @keyframes panel-in { from { transform: translateX(calc(-100% - 16px)); opacity: 0; } }
@@ -637,6 +672,7 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 
 /* 잘린 부채꼴은 작게, 포인터를 받는 영역은 44px 이상으로 둔다. */
 #panel-handle {
+  box-sizing: border-box; appearance: none; -webkit-appearance: none; -webkit-tap-highlight-color: transparent;
   position: fixed; z-index: 1200; top: 50%; left: calc(min(490px, 100vw - 360px) + 16px);
   width: 44px; height: 80px; transform: translateY(-50%); padding: 0;
   border: 0; background: transparent; color: var(--accent); cursor: ew-resize;
@@ -650,16 +686,12 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 #panel-handle span { position: relative; display: block; width: 28px; font-size: 26px; line-height: 1; transform: rotate(180deg); }
 .panel-collapsed #panel-handle { left: 0; }
 .panel-collapsed #panel-handle span { transform: none; }
-#panel-handle:hover::before, #panel-handle.dragging::before { background: var(--sel-bg); }
+#panel-handle:hover::before, #panel-handle.dragging::before { background: var(--surface); }
 #panel-handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 8px; }
 .location-control { max-width: min(250px, calc(100vw - 90px)); }
-.location-btn {
-  min-width: 48px; min-height: 44px; padding: 6px 10px; border: 1px solid var(--border);
-  border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit;
-  font-weight: 700; cursor: pointer; box-shadow: 0 1px 5px #0004;
-}
-.location-btn[aria-pressed="true"] { background: var(--accent); color: #fff; }
-.location-btn:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.location-btn { min-width: 52px; min-height: 44px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; box-shadow: 0 1px 5px #0004; }
+.location-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.location-btn { display: flex; align-items: center; justify-content: center; min-width: 44px; width: 44px; padding: 0; }
 .location-status {
   margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--surface);
   color: var(--ink); box-shadow: 0 1px 5px #0003; font-size: 12px;
@@ -707,7 +739,7 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
     border-radius: 50% 50% 0 0 / 100% 100% 0 0; box-shadow: 0 -2px 8px #0002;
   }
   #panel-handle span { width: auto; margin-top: 16px; transform: rotate(90deg); }
-  .panel-collapsed #panel-handle { left: 50%; bottom: 0; padding-bottom: env(safe-area-inset-bottom); height: calc(44px + env(safe-area-inset-bottom)); }
+  .panel-collapsed #panel-handle { left: 50%; bottom: env(safe-area-inset-bottom); padding: 0; height: 44px; }
   .panel-collapsed #panel-handle span { transform: rotate(-90deg); }
   .leaflet-control-attribution { margin-bottom: 44px; }
   section { padding: 10px 12px; }
@@ -798,7 +830,7 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 #search .od-fields { grid-column: 1; grid-row: 1; margin-bottom: 0; }
 #search .buttons { display: contents; }
 #search #btn-search { grid-column: 2; grid-row: 1; white-space: nowrap; }
-#search #btn-hybrid { grid-column: 1 / -1; justify-self: start; margin-top: 6px; }
+#search #btn-hybrid { grid-column: 2; grid-row: 1; max-width: 110px; margin: 0; }
 #developer-tools { margin-top: 12px; }
 #developer-tools > section { padding-left: 28px; }
 @media (max-width: 720px) {
@@ -817,3 +849,5 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
   #search .od-clear { min-height: 32px; height: 32px; }
   #search .od-swap { min-height: 32px; min-width: 32px; width: 32px; height: 32px; }
 }
+
+.route-card.selected .tl-veh { order: var(--arrival-order, 0); }

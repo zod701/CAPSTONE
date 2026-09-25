@@ -1,6 +1,5 @@
 // 툴팁 — 모든 title 을 브라우저 기본 툴팁 대신 같은 모양의 말풍선으로 띄운다(문서 전체에 한 번 건다).
-// 마우스가 올라가거나 키보드 포커스가 들어온 동안만 title 을 data-tip 으로 옮겨 기본 툴팁을 막고, 떠나면 되돌린다 —
-// 화면 낭독기와 다른 코드는 title 을 그대로 읽는다. 여러 줄(\n)은 줄을 바꿔 보인다(CSS white-space: pre-line).
+// 동적으로 추가·변경되는 title 도 data-tip 으로 옮기고 복원하지 않아 기본 툴팁과 겹치지 않게 한다.
 const DELAY_MS = 250; // 스쳐 지나가는 마우스에는 띄우지 않는다
 const GAP = 8;        // 요소와 말풍선 사이
 const EDGE = 8;       // 화면 가장자리 여백
@@ -20,11 +19,30 @@ export function initTooltips() {
   text = tip.querySelector(".tip-text");
   document.body.append(tip);
 
-  document.addEventListener("mouseover", (e) => enter(e.target.closest?.("[title]")));
+  const migrate = el => {
+    if (el.hasAttribute?.("title")) {
+      el.dataset.tip = el.getAttribute("title");
+      el.removeAttribute("title");
+    }
+    el.querySelectorAll?.("[title]").forEach(migrate);
+  };
+  migrate(document.body);
+  new MutationObserver(records => {
+    for (const record of records) {
+      if (record.type === "childList") record.addedNodes.forEach(migrate);
+      else if (record.attributeName === "title") migrate(record.target);
+    }
+    if (target) {
+      if (!target.isConnected || !target.dataset.tip) leave();
+      else if (!tip.hidden && text.textContent !== target.dataset.tip) show(target, target.dataset.tip);
+    }
+  }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ["title", "data-tip"] });
+
+  document.addEventListener("mouseover", (e) => enter(e.target.closest?.("[data-tip], [title]")));
   document.addEventListener("mouseout", (e) => {
     if (target && !target.contains(e.relatedTarget)) leave();
   });
-  document.addEventListener("focusin", (e) => enter(e.target.closest?.("[title]"), 0));
+  document.addEventListener("focusin", (e) => enter(e.target.closest?.("[data-tip], [title]"), 0));
   document.addEventListener("focusout", () => leave());
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") leave();
@@ -35,22 +53,19 @@ export function initTooltips() {
 
 function enter(el, delay = DELAY_MS) {
   if (!el || el === target) return;
-  const msg = el.getAttribute("title");
+  const msg = el.getAttribute("title") ?? el.dataset.tip;
   if (!msg) return;
   leave();
   target = el;
   el.dataset.tip = msg;
   el.removeAttribute("title"); // 기본 툴팁이 겹쳐 뜨지 않게
-  timer = setTimeout(() => show(el, msg), delay);
+  timer = setTimeout(() => { if (el.dataset.tip) show(el, el.dataset.tip); else leave(); }, delay);
 }
 
 function leave() {
   clearTimeout(timer);
   timer = null;
   if (target) {
-    // 그사이 코드가 title 을 새로 달았으면 그 값을 둔다
-    if (!target.hasAttribute("title") && target.dataset.tip != null) target.setAttribute("title", target.dataset.tip);
-    delete target.dataset.tip;
     target = null;
   }
   if (tip) tip.hidden = true;

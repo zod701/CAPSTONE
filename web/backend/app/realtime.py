@@ -257,7 +257,7 @@ def subway(raw: dict, now=None) -> list[dict]:
             eta = left - (age or 0)
             eta = eta if eta >= 0 else None      # 예측 시각이 이미 지났다 = 모름 (0 으로 우기지 않는다)
         else:                                    # barvlDt 가 0 이거나 없다 → 도착 코드로 가른다
-            eta = 0 if _text(row.get("arvlCd")) in ARVL_NOW else None
+            eta = 0 if _text(row.get("arvlCd")) in ARVL_NOW and not (ahead and int(ahead.group(1)) > 0) else None
         items.append({
             "line_id": _text(row.get("subwayId")) or None,      # 노선 필터용 내부 키 (응답에는 나가지 않는다)
             "direction": _text(row.get("updnLine")) or None,    # '내선'·'외선' 도 원문 그대로

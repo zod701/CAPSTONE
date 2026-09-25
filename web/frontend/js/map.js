@@ -29,6 +29,7 @@ export function createMap(el, { onError = () => {}, onPlaceClick = () => {} } = 
     maxBounds: [[33, 124], [39.5, 132]],
   }).setView([37.40, 127.10], 11);
 
+  map.attributionControl.remove();
   const vworld = { minZoom: 6, maxZoom: 19, attribution: "© VWorld" };
   const vw = (layer, opts = {}) => L.tileLayer(`/tiles/vworld/${layer}/{z}/{y}/{x}`, { ...vworld, ...opts });
   // 목록의 한 항목 = 밝은·어두운 타일 한 쌍 — 모드가 바뀌면 같은 항목 안에서 타일만 바뀐다.

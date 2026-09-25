@@ -56,6 +56,21 @@ def test_several_routes_in_one_step_add_frequencies():
     assert (r["steps"][0]["headway_m"], r["steps"][0]["wait_s"]) == (6.0, 180)
 
 
+def test_bus_display_keeps_individual_headways_separate_from_effective_headway():
+    class Routes:
+        def name_of(self, rid):
+            return {"A": "7727", "B": "7728", "C": "65"}[rid]
+
+    r = route([bus_step(["A", "B", "C"])])
+    add_wait([r], DB, MON_8, Routes())
+    assert r["steps"][0]["headway_m"] == 6.0
+    assert r["steps"][0]["bus_headways"] == [
+        {"id": "A", "name": "7727", "headway_m": 15.0},
+        {"id": "B", "name": "7728", "headway_m": 10.0},
+        {"id": "C", "name": "65", "headway_m": None},
+    ]
+
+
 def test_unknown_route_is_left_out_but_others_count():
     r = route([bus_step(["B", "C"])])   # C 는 배차 정보 없음 → B 만으로 센다
     add_wait([r], DB, MON_8)

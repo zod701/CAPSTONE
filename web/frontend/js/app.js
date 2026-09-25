@@ -9,7 +9,6 @@ import { initStopRoutes, stopRoutesSection } from "./stoproutes.js";
 import { initTooltips } from "./tooltip.js";
 import { initLocation } from "./location.js";
 import { initPanelHandle } from "./panel.js";
-import { initMapLongPress } from "./longpress.js";
 
 const $ = (id) => document.getElementById(id);
 const CONSOLE_URL = "https://developers.kakao.com/console/app";
@@ -85,10 +84,11 @@ function setMsg(id, text, cls = "muted") {
 const view = createMap($("map"), { onError: (err) => showBanner(err), onPlaceClick: (p) => openOdMenu(p.latlng, p) });
 R.initRoutes(view);
 initStopRoutes(view);
+document.addEventListener('arrivals-quota', event => renderQuota(event.detail));
 initLocation(view.map, (latlng) => {
   document.activeElement?.blur();
   openOdMenu(latlng, { name: "현재 위치" });
-});
+}, R.updatePosition);
 
 let panelMapOffset = 0;
 function updateMapLayout() {
@@ -216,6 +216,7 @@ function update() {
 // keepHybrid — 같은 출발·도착으로 다시 검색할 때 찾은 하이브리드는 남긴다(버튼도 잠근 채)
 function clearResults({ keepHybrid = false, pointChanged = false } = {}) {
   $("btn-hybrid").hidden = true;
+  $("btn-search").hidden = false;
   panel.reset({ pointChanged });
   state.transit = null;
   state.selectedIdx = null;
@@ -340,8 +341,8 @@ function openOdMenu(latlng, place = null, label = null) {
   return box;
 }
 
-const cancelMapPress = initMapLongPress($("map"), (event) => openOdMenu(view.map.mouseEventToLatLng(event)));
-view.map.on("movestart zoomstart", cancelMapPress);
+view.map.on("click", event => openOdMenu(event.latlng));
+view.map.on("dblclick", () => view.map.closePopup());
 
 $("btn-swap").addEventListener("click", () => {
   const { origin, dest } = state;
@@ -394,6 +395,7 @@ async function search() {
     if (state.hybrid) drawHybrid(); // 목록에 다시 섞는다
     showResultsBar();
     $("btn-hybrid").hidden = false;
+    $("btn-search").hidden = true;
   }
   refreshQuota();
 }

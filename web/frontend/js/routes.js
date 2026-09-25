@@ -1,5 +1,70 @@
 // 대중교통 경로·택시·매칭 진단: 지도 그리기 + 사이드바 카드/표.
 import { esc, safeColor } from "./api.js";
+import { locateProgress, remainingSeconds, stopProgress } from "./progress.js";
+import { mountArrivals } from "./arrivals.js";
+
+let positionFix = null;
+const timelineRoutes = new WeakMap();
+export function updatePosition(fix) {
+  positionFix = fix;
+  paintProgress();
+}
+function paintProgress() {
+  document.querySelectorAll('.route-progress, .route-progress-status, .route-remaining, .strip-progress').forEach(el => el.remove());
+  if (!matchMedia("(max-width: 720px)").matches) return;
+  const detail = document.querySelector('.route-card.selected.expanded .rc-detail');
+  const route = detail && timelineRoutes.get(detail);
+  if (!route) return;
+  const result = locateProgress(route.steps || [], positionFix);
+  const remaining = remainingSeconds(route, result);
+  const destination = detail.querySelector('.tl-node:last-child .tl-name');
+  if (destination) {
+    const label = document.createElement('span');
+    label.className = 'route-remaining';
+    const arrival = remaining == null ? null : new Date(Date.now() + remaining * 1000);
+    label.textContent = arrival
+      ? `${Math.ceil(remaining / 60)}분 남음 · ${arrival.getHours()}시 ${String(arrival.getMinutes()).padStart(2, '0')}분 도착 예정`
+      : '남은 시간 추정 불가';
+    label.title = '경로 진행률과 기존 이동·대기 시간 기준 추정입니다. 교통 상황과 첫·끝 도보 누락에 따라 차이가 날 수 있습니다.';
+    destination.append(label);
+  }
+  if (!positionFix) return;
+  if (!result) {
+    const status = document.createElement('p');
+    status.className = 'route-progress-status';
+    status.textContent = positionFix.accuracy > 100 ? '현재 위치 정확도가 낮습니다' : '경로 위의 위치를 확인할 수 없습니다';
+    detail.prepend(status);
+    return;
+  }
+  const rail = detail.querySelector(`[data-step="${result.index}"] .tl-rail`);
+  if (!rail) return;
+  const marker = document.createElement('span');
+  marker.className = 'route-progress';
+  marker.style.top = `${result.fraction * 100}%`;
+  marker.setAttribute('role', 'img');
+  marker.setAttribute('aria-label', '현재 위치 (GPS 추정)');
+  marker.title = '현재 위치 (GPS 추정)';
+  rail.append(marker);
+  const step = route.steps[result.index];
+  const strip = detail.querySelector(`[data-step="${result.index}"] .strip`);
+  if (!['BUS', 'SUBWAY'].includes(step.type) || !strip || strip.hidden) return;
+  const snake = strip.querySelector('.strip-snake');
+  const dots = [...snake.querySelectorAll('.strip-dot')];
+  if (!dots.length) return;
+  const position = stopProgress(step, result.fraction);
+  const index = Math.min(dots.length - 1, Math.floor(position));
+  const a = dots[index].getBoundingClientRect();
+  const b = dots[Math.min(index + 1, dots.length - 1)].getBoundingClientRect();
+  const box = snake.getBoundingClientRect();
+  const here = document.createElement('span');
+  here.className = 'strip-progress';
+  here.textContent = '내 위치';
+  here.title = 'GPS 경로상 추정 위치 — 실제 탑승 여부는 확인할 수 없습니다';
+  here.style.left = `${a.left + a.width / 2 + (b.left - a.left) * (position - index) - box.left}px`;
+  here.style.top = `${a.top + a.height / 2 + (b.top - a.top) * (position - index) - box.top}px`;
+  snake.append(here);
+}
+matchMedia("(max-width: 720px)").addEventListener('change', paintProgress);
 
 const COLOR = { BUS: "#1E88E5", SUBWAY: "#8E24AA", WALKING: "#757575", TAXI: "#FFC107", OTHER: "#9E9E9E" };
 // 버스 유형(카카오 vehicles[].type, 실측 · 노선 순서표 route_type) → 실제 차체 색. 서울: 간선 파랑 · 지선 초록 · 순환 노랑 · 공항 (서울 BIS 노선색),
@@ -353,18 +418,22 @@ function expandCard(key, animate = true) {
       detailAnimations.delete(detail);
     };
   }
+  paintProgress();
 }
 
 // --- 구간 타임라인: 출발지 → (구간 · 정류장)… → 도착지, 세로로 ---
 
 // 펼친 카드의 구간 타임라인 — 승차 구간을 누르면 정류장·역 목록이 열린다 (하이브리드 카드도 같은 것을 쓴다)
 export function fillTimeline(detail, route) {
+  timelineRoutes.set(detail, route);
   detail.innerHTML = routeTimelineHTML(route);
+  mountArrivals(detail, route, { busColor, chipStyle });
   for (const b of detail.querySelectorAll(".tl-toggle")) {
     b.addEventListener("click", () => {
       const strip = b.nextElementSibling;
       strip.hidden = !strip.hidden;
       b.setAttribute("aria-expanded", String(!strip.hidden));
+      paintProgress();
     });
   }
 }
@@ -408,7 +477,10 @@ export function routeTimelineHTML(route) {
   }
   if (edgeWalk(steps.at(-1), "to_name")) items.push({ kind: "missing" });
   node("도착지", true);
-  return `<ol class="tl">${items.map(timelineItem).join("")}</ol>`;
+  return `<ol class="tl">${items.map(it => {
+    const html = timelineItem(it);
+    return it.s ? html.replace('<li ', `<li data-step="${steps.indexOf(it.s)}" `) : html;
+  }).join("")}</ol>`;
 }
 
 const rail = (line = "") => `<span class="tl-rail">${line}</span>`;
@@ -444,7 +516,7 @@ function timelineItem(it) {
   const n = (s.stops || []).length;
   const vs = vehicles(s);
   const vehHTML = vs.length
-    ? vs.map((x) => `<span class="tl-veh">${chip(x.name, s.type === "BUS" ? busColor(x.type) : color)}`
+    ? vs.map((x) => `<span class="tl-veh" data-vehicle="${esc(x.name)}">${chip(x.name, s.type === "BUS" ? busColor(x.type) : color)}`
       + (x.type ? `<span class="tl-vtype">${esc(x.type)}</span>` : "") + "</span>").join("")
     : chip(TYPE_LABEL[s.type] || s.type || "?", color);
   const count = n ? ` · ${n}개 ${s.type === "SUBWAY" ? "역" : "정류장"}` : "";
@@ -493,6 +565,7 @@ export function markSelected(el, idx) {
 
 function paintSelected() {
   for (const b of cards.el.querySelectorAll(".route-card")) b.classList.toggle("selected", b.dataset.key === cards.selected);
+  paintProgress();
 }
 
 // --- 지도: 대중교통 경로 ---

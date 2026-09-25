@@ -107,6 +107,12 @@ def add_wait(transit_routes, db, now, routes=None):
             step["wait_s"] = None
             step["headway_m"] = None
             step.pop("wait_source", None)
+            if step["type"] == "BUS":
+                step["bus_headways"] = [
+                    {"id": rid, "name": routes.name_of(rid),
+                     "headway_m": _route_headway(db, rid, day) if db else None}
+                    for rid in step.get("route_ids") or ()
+                ] if routes else []
             ride = step["type"] in ("BUS", "SUBWAY")
             if ride:
                 h = _step_headway(step, db, day, at, routes)

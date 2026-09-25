@@ -35,6 +35,7 @@ function legText(r) {
 // A 는 맨 앞, B 는 맨 뒤, D 는 서버가 뺀 공백 자리(gap.at), C 는 돌아가기 시작하는 정류장 뒤(detour.taxi_at)에 넣는다
 function combinedRoute(r) {
   const taxi = { type: "TAXI", time_s: r.taxi.duration_s, distance_m: r.taxi.distance_m,
+    path: r.taxi.path,
     fare: (r.taxi.fare?.taxi ?? 0) + (r.taxi.fare?.toll ?? 0), counted_s: r.taxi_counted_s };
   const steps = r.transit?.steps || [];
   if (r.hybrid === "A") return { steps: [{ ...taxi, to_name: r.anchor.name }, ...steps] };

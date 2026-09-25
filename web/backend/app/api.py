@@ -17,7 +17,7 @@ from .config import KST
 from .errors import ApiError
 from .resolver import resolve_route, summarize
 from .transit import normalize_car, normalize_transit, probe_summary
-from .wait import add_wait
+from .wait import add_wait, day_type, _route_headway
 
 router = APIRouter(prefix="/api")
 
@@ -343,6 +343,8 @@ async def arrivals_stop_payload(st, stop_key):
         raise got[0]
     types = {r["id"]: r["type"] or None for r in st.routes.routes_at(stop_key)} if st.routes else {}
     items, failed = [], []
+    headway_db = getattr(st, "headway", None)
+    day = day_type(datetime.now(KST))
     for (source, _), r in zip(calls, got):
         if isinstance(r, ApiError):
             failed.append({"source": source, "code": r.code, "message": r.message})
@@ -350,6 +352,7 @@ async def arrivals_stop_payload(st, stop_key):
         for it in r:
             if it["route_type"] is None and it["route_id"]:
                 it["route_type"] = types.get(it["route_id"])   # 순서표의 카카오 유형 이름 (프론트 BUS_COLOR 키)
+            it["headway_m"] = _route_headway(headway_db, it["route_id"], day) if headway_db and it["route_id"] else None
             items.append(it)
     items.sort(key=_eta_order)
     return {"stop": stop_key, "name": row["name"], "items": items, "failed": failed}
