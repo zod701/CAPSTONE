@@ -87,7 +87,7 @@ initStopRoutes(view);
 document.addEventListener('arrivals-quota', event => renderQuota(event.detail));
 initLocation(view.map, (latlng) => {
   document.activeElement?.blur();
-  openOdMenu(latlng, { name: "현재 위치" });
+  openOdMenu(latlng);
 }, R.updatePosition);
 
 let panelMapOffset = 0;
@@ -436,6 +436,7 @@ function applyTab() {
     b.disabled = TRANSIT_TABS.includes(t) && !n[t]; // 그 종류의 경로가 없으면 잠근다
   }
   $("hybrid").hidden = !(state.tab === "hybrid" || state.tab === "all");
+  $("hybrid").dataset.tab = state.tab;
   const shown = R.setRouteView({ group: state.tab === "all" ? null : state.tab });
   if (state.tab === "hybrid") return; // 하이브리드 탭은 카드를 누르기 전까지 지도를 바꾸지 않는다
   // 지도의 경로가 이 탭에 없으면 탭의 첫 경로로 — 전체 탭에서는 고른 하이브리드를 그대로 둔다

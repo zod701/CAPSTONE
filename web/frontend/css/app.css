@@ -298,6 +298,9 @@ small { color: var(--muted); }
 .arrivals-dialog section { padding: 10px 0; border-bottom: 1px solid var(--line); }
 .arrivals-dialog small { display: block; color: var(--muted); }
 .arrivals-dialog .arrival-headway { display: inline; margin-left: 8px; }
+.arrivals-dialog .arrival-details { margin-top: 5px; padding-left: 12px; }
+.arrivals-dialog .arrival-details p { margin: 4px 0; line-height: 1.4; }
+.arrivals-dialog .arrival-details small { margin-top: 2px; }
 .arrival-group { margin-top: 16px; padding: 12px; border-top: 2px solid var(--line); }
 .arrival-group h3 { margin: 0 0 8px; font-size: 13px; }
 .arrival-recommended { border: 1px solid var(--accent); border-radius: 8px; background: var(--sel-bg); }
@@ -851,3 +854,5 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 }
 
 .route-card.selected .tl-veh { order: var(--arrival-order, 0); }
+.hy-base { display: none; }
+#hybrid[data-tab="hybrid"] .hy-base { display: block; }

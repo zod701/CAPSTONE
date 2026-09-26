@@ -124,8 +124,8 @@ function showArrivals(point, result, styles) {
     const color = styles.busColor?.(item.source === 'seoul' && item.route_type === '마을' ? '지선' : item.route_type);
     const badge = point.step.type === 'BUS' && color ? ` class="chip" style="${styles.chipStyle(color)}"` : '';
     const headway = point.step.type === 'BUS' ? `<small class="arrival-headway">${esc(arrivalHeadway(point, item))}</small>` : '';
-    return `<section><strong${badge}>${esc(group.name)}</strong>${headway}${group.rows.slice(0, 2).map((item, i) =>
-      `<p>${i ? '다음 차' : '이번 차'} · <span data-arrival-index="${items.indexOf(item)}"></span>${item.n_stops_ahead != null ? ` · ${esc(item.n_stops_ahead)}개 전` : ''}${item.seats != null ? ` · 잔여 ${esc(item.seats)}석` : ''}${item.message && !/^곧\s*도착$/.test(item.message) ? `<small>${esc(item.message)} (조회 당시)</small>` : ''}</p>`).join('')}${group.rows.length < 2 ? '<small>다음 차 정보 없음</small>' : ''}</section>`;
+    return `<section><strong${badge}>${esc(group.name)}</strong>${headway}<div class="arrival-details">${group.rows.slice(0, 2).map(item =>
+      `<p><span data-arrival-index="${items.indexOf(item)}"></span>${item.n_stops_ahead != null ? `, ${esc(item.n_stops_ahead)}개 전` : ''}${item.seats != null ? ` · 잔여 ${esc(item.seats)}석` : ''}${item.message && !/^곧\s*도착$/.test(item.message) ? `<small>${esc(item.message)} (조회 당시)</small>` : ''}</p>`).join('')}${group.rows.length < 2 ? '<small>다음 차 정보 없음</small>' : ''}</div></section>`;
   };
   const rows = point.step.type === 'BUS' ? [true, false].map(selected => {
     const list = groups.filter(group => group.selected === selected);
@@ -137,7 +137,6 @@ function showArrivals(point, result, styles) {
   }).join('');
   dialog.innerHTML = `<header><strong>${esc(point.name)}</strong><button type="button" aria-label="도착정보 닫기">×</button></header>
     <p class="muted">${result?.at ? `${time(result.at)} 조회 · 현재 정류장 도착정보` : '새로고침을 누르면 실시간 정보를 조회합니다.'}</p>
-    <p class="muted">탑승 가능 여부나 환승 대기시간 예측이 아닙니다.</p>
     ${point.step.type === 'SUBWAY' ? `<p class="arrival-recommended">${esc(point.name)} → ${esc(point.step.stops?.[1] || '?')} 방면 · ${esc(point.step.stops?.at(-1) || point.step.alight_name || '?')} 하차<br><small>같은 방향도 종착역·급행 정차역을 확인하세요.</small></p>` : ''}
     ${result?.error ? `<p>${esc(result.error)}</p>` : rows || '<p>도착정보 없음</p>'}
     ${(result?.data?.failed || []).map(f => `<p>${esc(f.message)}</p>`).join('')}`;
@@ -174,7 +173,7 @@ export function mountArrivals(detail, route, styles = {}) {
     const old = node?.classList.contains('tl-node') ? node.querySelector('.tl-wait') : null;
     const button = document.createElement('button');
     button.type = 'button'; button.className = 'mobile-arrivals arrival-link';
-    button.textContent = '실시간';
+    button.textContent = '도착 정보';
     old?.classList.toggle('arrival-old-wait', i !== 0 || !!state.results[i]?.data);
     button.addEventListener('click', () => showArrivals(point, state.results[i], styles));
     (node?.querySelector('.tl-name') || segment.querySelector('.tl-info')).insertAdjacentElement('beforeend', button);

@@ -92,7 +92,7 @@ let stopsOpen = false; // 진단의 "승·하차 정류소" 접힘 상태 (경�
 
 export function initRoutes(view) {
   v = view;
-  v.map.on("zoomend overlayadd", declutterLabels);
+  v.map.on("zoomend moveend resize overlayadd", declutterLabels);
 }
 
 const num = (x) => Math.round(x).toLocaleString("ko-KR");
@@ -639,18 +639,22 @@ function drawStops(route, g, renderer) {
   }
 }
 
-// 이름표가 겹치면 뒤의 것을 숨긴다(확대하면 다시 보인다). 승·하차(환승) 이름은 항상 보인다.
+// 충분히 확대한 뒤에만 이름을 표시한다. 승·하차를 우선하되 겹치면 숨긴다.
 function declutterLabels() {
   const items = stopLabels
     .map((it) => ({ end: it.end, el: it.marker.getTooltip()?.getElement() }))
     .filter((it) => it.el?.isConnected)
     .sort((a, b) => b.end - a.end);
+  if (v.map.getZoom() < 16) {
+    for (const it of items) it.el.style.visibility = "hidden";
+    return;
+  }
   for (const it of items) it.el.style.visibility = "";
   const rects = items.map((it) => it.el.getBoundingClientRect());
   const shown = [];
   const hide = items.map((it, i) => {
     const r = rects[i];
-    const hit = !it.end && shown.some((q) => r.left < q.right && r.right > q.left && r.top < q.bottom && r.bottom > q.top);
+    const hit = shown.some((q) => r.left < q.right + 4 && r.right + 4 > q.left && r.top < q.bottom + 4 && r.bottom + 4 > q.top);
     if (!hit) shown.push(r);
     return hit;
   });
@@ -699,7 +703,7 @@ export function renderCarCard(el, car, onToggle) {
     return;
   }
   el.innerHTML = `<div class="route-card taxi-card">
-    <button type="button" class="rc-head" aria-pressed="false" title="누르면 지도에 택시 경로 표시 · 다시 누르면 숨김">
+    <button type="button" class="rc-head" aria-pressed="false">
       <span class="rc-top"><b class="rc-type">택시</b><b class="rc-time">${fmtMin(car.duration_s)}</b></span>
       <span class="rc-meta">거리 ${fmtKm(car.distance_m)} · 택시요금 ${fmtWon(car.fare?.taxi)} · 통행료 ${fmtWon(car.fare?.toll)}</span>
       <span class="muted">카카오모빌리티 제공</span>
