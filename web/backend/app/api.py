@@ -164,8 +164,7 @@ async def transit_payload(st, sx, sy, ex, ey, probe=False, realtime=False):
     """대중교통 경로 한 번 — 정규화 + 접지·대기까지 끝낸 응답. 하이브리드도 기준 경로를 이것으로 받는다.
 
     `realtime` 이면 첫 승차 대기를 실시간 도착정보로 바꾼다(첫 승차 정류장·역마다 도착정보 1콜, 15초 캐시).
-    '출발지에서 걸어서 첫 정류장에 닿는다' 는 전제라 [경로 검색] 결과에만 켠다 — 하이브리드는 택시로 정류장에 닿는
-    A 에 원래 경로가 필요해 받은 뒤 스스로 바꾸고, 앵커에서 다시 부르는 경로에는 켜지 않는다.
+    웹 경로 검색과 하이브리드 검색에서는 켜지 않는다. 실시간 조회는 화면의 갱신 버튼으로 요청한다.
     """
     raw = await st.kakao.transit(sx, sy, ex, ey)
     norm = normalize_transit(raw)
@@ -197,7 +196,20 @@ async def transit_payload(st, sx, sy, ex, ey, probe=False, realtime=False):
 @router.get("/transit")
 async def transit(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat, probe: bool = False):
     st = request.app.state
-    norm = await transit_payload(st, sx, sy, ex, ey, probe, realtime=True)
+    norm = await transit_payload(st, sx, sy, ex, ey, probe)
+    norm["baseline"] = None
+    if norm["routes"]:
+        try:
+            anchors, compare = hybrid_plan._algo()
+            for route in norm["routes"]:
+                scored = compare.reconstruct(route, (sx, sy), (ex, ey))
+                route["comparison"] = scored
+                route["generalized_cost"] = ((scored["fare"] or 0)
+                                             + scored["time_s"] / 60 * anchors.VOT["time"])
+            norm["baseline"], base_route = hybrid_plan._fastest(norm["routes"], (sx, sy), (ex, ey), compare)
+            norm["baseline_index"] = next(i for i, route in enumerate(norm["routes"]) if route is base_route)
+        except ApiError:
+            pass   # algo가 없는 배포에서도 대중교통 검색은 유지한다
     norm["quota"] = st.quota.snapshot()
     response.headers["Cache-Control"] = "no-store"
     return norm
@@ -220,7 +232,7 @@ async def hybrid_reuse(request: Request, response: Response, sx: Lon, sy: Lat, e
     """같은 출발·도착의 [경로 검색] 결과(화면이 들고 있는 routes)를 본문으로 받아 기준 경로로 다시 쓴다 — 대중교통 1콜을 아낀다.
 
     카카오 응답을 서버에 두지 않는 규칙은 그대로다: 본문은 이 요청을 처리하는 동안에만 쓰고 버린다(web/README.md §6).
-    화면은 결과를 받은 지 5분 안이고 출발·도착이 그대로일 때만 보낸다(app.js). 첫 승차 대기는 이 요청 시각의 실시간으로 다시 매긴다.
+    화면은 결과를 받은 지 5분 안이고 출발·도착이 그대로일 때만 보낸다(app.js). 첫 승차 대기도 로컬 배차 추정을 사용한다.
     본문은 브라우저가 보낸 것이라 믿지 않는다 — 모양이 맞지 않으면 400.
     """
     routes = body.get("routes") if isinstance(body, dict) else None
@@ -237,7 +249,7 @@ async def hybrid_reuse(request: Request, response: Response, sx: Lon, sy: Lat, e
 
 async def _hybrid(request, response, o, d, top, t_max, base_routes):
     st = request.app.state
-    out = await hybrid_plan.plan(st, transit_payload, o, d, arrivals=realtime_items, base_routes=base_routes,
+    out = await hybrid_plan.plan(st, transit_payload, o, d, base_routes=base_routes,
                                  top=top, t_max_s=t_max * 60)
     out["quota"] = st.quota.snapshot()
     response.headers["Cache-Control"] = "no-store"

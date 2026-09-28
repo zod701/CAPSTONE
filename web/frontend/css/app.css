@@ -160,6 +160,8 @@ small { color: var(--muted); }
 /* 검색창 + 고른 장소를 곧바로 출발·도착으로 (고르기 전에는 잠김) */
 .place-row { display: flex; align-items: center; gap: 4px; margin: 0 0 8px; }
 .place-row .place-search { flex: 1; margin: 0; }
+#search-location { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); min-height: 36px; padding: 0 8px; border: 0; border-radius: 6px; background: var(--surface); color: var(--accent); font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+#search-location:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .od-pick { flex: 0 0 auto; border: 0; font: inherit; font-size: 12px; font-weight: 700; line-height: 29px; cursor: pointer; }
 .od-pick:disabled { opacity: 0.35; cursor: default; }
 .od-pick:not(:disabled):hover, .od-pick:focus-visible { filter: brightness(1.12); outline: 2px solid var(--sel-ring); outline-offset: 1px; }
@@ -776,7 +778,7 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 #floating-search .od-pick:disabled { display: none; }
 #floating-search .od-pick { min-height: 44px; }
 #floating-search #place-q {
-  min-height: 52px; padding: 12px 16px; font-size: 16px;
+  min-height: 52px; padding: 12px 66px 12px 16px; font-size: 16px;
   border-radius: 14px; box-shadow: 0 3px 14px #0003;
 }
 #banners {
@@ -822,7 +824,10 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 }
 
 /* 조작부는 작게, 개발자 도구는 카드 목록 끝에서 펼친다. */
-#route-bar { display: flex; align-items: center; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+#route-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.vot-control { flex: 1 0 100%; display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+.vot-control input { flex: 1; min-width: 0; min-height: 32px; accent-color: var(--accent); }
+.vot-control output { min-width: 82px; text-align: right; font-variant-numeric: tabular-nums; }
 #route-bar .rt-tabs { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; margin: 0; overflow-x: auto; }
 #route-bar .rt-group { flex-wrap: nowrap; }
 #route-bar .rt-sort { flex: 0 0 auto; margin-left: auto; padding-left: 8px; gap: 4px; font-size: 11px; }
@@ -833,7 +838,7 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 #search .od-fields { grid-column: 1; grid-row: 1; margin-bottom: 0; }
 #search .buttons { display: contents; }
 #search #btn-search { grid-column: 2; grid-row: 1; white-space: nowrap; }
-#search #btn-hybrid { grid-column: 2; grid-row: 1; max-width: 110px; margin: 0; }
+#search #btn-hybrid { grid-column: 2; grid-row: 1; max-width: 110px; margin: 0; white-space: pre-line; }
 #developer-tools { margin-top: 12px; }
 #developer-tools > section { padding-left: 28px; }
 @media (max-width: 720px) {

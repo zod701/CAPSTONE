@@ -85,6 +85,70 @@ def test_first_mile_calls_car_to_anchor_and_transit_from_anchor():
     assert row["transit"] is not None
 
 
+@pytest.mark.parametrize("hybrid,strategy", [("A", "b"), ("B", "b"), ("B", "a"),
+                                            ("D", "a"), ("C", "taxi_to_d"), ("C", "reanchor")])
+def test_walk_replacement_never_calls_car_and_keeps_walk_time(hybrid, strategy):
+    if hybrid == "C":
+        candidate = detour_cand(strategy)
+    elif hybrid == "D":
+        candidate = gap_cand("walk", True)
+    else:
+        candidate = cand(hybrid, strategy)
+    candidate.update(anchors.walking_connection(800))
+    calls = Calls(legs=transit_route(board=O if hybrid == "B" else ANCHOR_PT,
+                                   alight=ANCHOR_PT if hybrid == "B" else D))
+    row = run(candidate, calls, base_routes=[named_route()])
+    assert calls.car == []
+    assert len(calls.transit) == int(hybrid == "A" or (hybrid == "B" and strategy == "b")
+                                    or (hybrid == "C" and strategy == "reanchor"))
+    assert row["taxi"] is None and row["link_mode"] == "WALKING"
+    assert row["walking"]["duration_s"] == anchors.walk_s(800)
+    assert row["walking"]["fare"] == {"taxi": 0, "toll": 0}
+    if hybrid != "D":  # 수제 D 후보의 base_time_s와 ride_s는 별도 픽스처 값이다.
+        assert row["time_s"] == pytest.approx(row["transit_time_s"] + anchors.walk_s(800))
+    else:
+        assert row["time_s"] == pytest.approx(candidate["base_time_s"] - candidate["gap_s"] + anchors.walk_s(800))
+    assert row["fare"] < 9000
+
+
+@pytest.mark.parametrize("hybrid,strategy", [("A", "b"), ("B", "b"), ("B", "a"),
+                                            ("D", "a"), ("C", "taxi_to_d"), ("C", "reanchor")])
+def test_walk_verification_cli_matches_web(hybrid, strategy):
+    from algo.cli import _verify_one
+    candidate = (detour_cand(strategy) if hybrid == "C" else gap_cand("walk", True)
+                 if hybrid == "D" else cand(hybrid, strategy))
+    candidate.update(anchors.walking_connection(800))
+    calls = Calls(legs=transit_route(board=O if hybrid == "B" else ANCHOR_PT,
+                                   alight=ANCHOR_PT if hybrid == "B" else D))
+    async def no_car(*args):
+        pytest.fail("도보 대체 후보가 자동차 API를 호출함")
+    async def transit(*args):
+        return {"routes": [calls.legs]}
+    cli = asyncio.run(_verify_one(SimpleNamespace(car=no_car, transit=transit), O, D, candidate, 500))
+    web = run(candidate, calls, base_routes=[named_route()])
+    assert (cli["time_s"], cli["fare"]) == pytest.approx((web["time_s"], web["fare"]))
+
+
+def test_plan_keeps_walk_candidate_without_five_minute_saving(monkeypatch):
+    import app.hybrid as hybrid
+    candidate = cand("A", "b", score_s=100, ride_id="r1")
+    candidate.update(anchors.walking_connection(100))
+    monkeypatch.setattr(anchors, "propose_backtrack", lambda *args, **kw:
+                        ([candidate] if kw["hybrid"] == "A" else [], {}))
+    for name in ("propose_perturb", "propose_gap", "propose_detour"):
+        monkeypatch.setattr(anchors, name, lambda *args, **kw: ([], {}))
+    monkeypatch.setattr(hybrid, "_sgg", lambda *args: None)
+    calls = Calls(transit_route(board=ANCHOR_PT, alight=D, time_s=1000, wait_s=0))
+    st = SimpleNamespace(stops=object(), routes=object(), lines=object(), headway=None,
+                         anchor_tables=SimpleNamespace(phys={}, hours={}),
+                         kakao=SimpleNamespace(car=calls.car_call))
+    result = asyncio.run(hybrid.plan(st, calls.transit_call, O, D,
+                                    base_routes=[transit_route(board=O, alight=D, time_s=1200, wait_s=0)]))
+    row, = result["routes"]
+    assert 0 < result["baseline"]["time_s"] - row["time_s"] < anchors.TAXI_MIN_SAVING_S
+    assert row["link_mode"] == "WALKING" and calls.car == []
+
+
 @pytest.mark.parametrize("strategy", ["a", "b"])
 def test_last_mile_takes_taxi_from_anchor_to_destination(strategy):
     calls = Calls()

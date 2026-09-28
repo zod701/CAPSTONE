@@ -1,9 +1,7 @@
 """후보를 같은 잣대로 재구성하고 견준다 — 일반화 비용 · Pareto · 원/분 (순수 함수, 저장 없음).
 
-**잣대가 하나여야 한다.** 블랙박스의 `total_time_s` 를 그대로 쓰면 안 된다 — 거기에는 응답에 없는
-첫·끝 도보가 이미 들어 있고 대기는 들어 있지 않다(method.md E15). 하이브리드 후보는 잘라 붙인 구간의
-합으로 만들 수밖에 없으므로, 기준 경로도 같은 식(구간 시간 합 + 추정 도보 + 대기)으로 다시 만든다.
-섞어 쓰면 하이브리드가 부당하게 빨라 보이고, 배차가 긴 노선이 체계적으로 유리해진다(§7.4).
+온전한 경로는 첫·끝 도보를 포함한 API 총시간에 대기를 더한다(method.md E15).
+API 총시간이 없을 때만 구간 시간 합과 자체 추정 도보로 보완한다.
 """
 from geoutil import haversine_m
 
@@ -43,7 +41,10 @@ def reconstruct(route, o, d):
     walk_m = edge_walk_m(steps, o, d)
     wait = sum(s["wait_s"] if s.get("wait_s") is not None else WAIT_UNKNOWN_S
                for s in steps if s["type"] in RIDE_TYPES)
-    return {"time_s": ride + walk_s(walk_m) + (wait or 0), "fare": fare_of(route["fare"]),
+    total = route.get("total_time_s")
+    if total is None:
+        total = ride + walk_s(walk_m)
+    return {"time_s": total + wait, "fare": fare_of(route["fare"]),
             "walk_m": walk_m, "transfers": route.get("transfers"), "wait_s": wait}
 
 
@@ -93,10 +94,10 @@ def diversify(items, n=4, key="hybrid"):
     return out[:n]
 
 
-def saves_enough(time_s, base_time_s):
+def saves_enough(time_s, base_time_s, *, walking=False):
     """택시를 쓰는 최소 기준 — 같은 잣대의 기준선보다 `TAXI_MIN_SAVING_S`(5분) 이상 빠른가.
 
     택시가 대신한 부분을 아는 후보(D)는 후보 단계에서 이미 거르고, 모르는 후보((b)·(a)·C)는 검증한 시간으로 여기서 견준다.
     """
-    return base_time_s - time_s >= TAXI_MIN_SAVING_S
+    return time_s < base_time_s if walking else base_time_s - time_s >= TAXI_MIN_SAVING_S
 

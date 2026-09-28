@@ -6,6 +6,7 @@ export function initLocation(map, onPick, onPosition = () => {}) {
   let accuracy = null;
   let centered = false;
   let recenterPending = false;
+  let pickPending = false;
   let resume = false;
   let status;
   const Control = L.Control.extend({
@@ -18,16 +19,24 @@ export function initLocation(map, onPick, onPosition = () => {}) {
       button.type = "button";
       button.innerHTML = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor" stroke="none"/><path d="M12 1v4m0 14v4M1 12h4m14 0h4"/></svg>';
       button.setAttribute("aria-label", "내 위치로 지도 확대");
-      button.addEventListener("click", () => {
-        if (marker) map.setView(marker.getLatLng(), Math.max(map.getZoom(), 16));
-        else { recenterPending = true; start(); }
-      });
+      button.addEventListener("click", recenter);
       L.DomEvent.disableClickPropagation(box);
       L.DomEvent.disableScrollPropagation(box);
       return box;
     },
   });
   new Control({ position: "topleft" }).addTo(map);
+
+  function recenter() {
+    if (marker) map.setView(marker.getLatLng(), Math.max(map.getZoom(), 16));
+    else { recenterPending = true; start(); }
+  }
+
+  function pick() {
+    pickPending = !marker;
+    recenter();
+    if (marker) onPick(marker.getLatLng());
+  }
 
   function setStatus(active, message = "") {
     status.textContent = message;
@@ -41,6 +50,7 @@ export function initLocation(map, onPick, onPosition = () => {}) {
     marker?.remove();
     accuracy?.remove();
     marker = accuracy = null;
+    pickPending = false;
     onPosition(null);
     setStatus(false, message);
   }
@@ -83,6 +93,10 @@ export function initLocation(map, onPick, onPosition = () => {}) {
         recenterPending = false;
         map.setView(latlng, Math.max(map.getZoom(), 16));
       }
+      if (pickPending) {
+        pickPending = false;
+        onPick(latlng);
+      }
     }, (error) => {
       if (current !== generation) return;
       const messages = {
@@ -104,4 +118,5 @@ export function initLocation(map, onPick, onPosition = () => {}) {
   map.on("unload", () => stop());
   if (!document.hidden) start();
   else resume = true;
+  return { recenter, pick };
 }

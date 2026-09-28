@@ -103,7 +103,7 @@ def print_candidates(cands, title):
             c["strategy"] + c["hybrid"], (c["name"] or "")[:16], str(c.get("ride_name") or "")[:9],
             c["taxi_s"] / 60, c["fare"],
             "?" if c["wait_s"] is None else "%.1f" % (c["wait_s"] / 60),
-            c["ride_s"] / 60, c["walk_s"] / 60, c["score_s"] / 60))
+            c["ride_s"] / 60, (c["walk_s"] + c.get("link_walk_s", 0)) / 60, c["score_s"] / 60))
 
 
 def cmd_plan(args):
@@ -242,6 +242,12 @@ def _print_first_waits(routes, rt_routes):
             "?" if s["static_wait_s"] is None else "%.1f" % (s["static_wait_s"] / 60), s["wait_s"] / 60, s["wait_source"]))
 
 
+async def _connection(api, cand, start, end):
+    if cand.get("link_mode") == "WALKING":
+        return anchors.walking_leg(cand, start, end)
+    return await api.car(start, end)
+
+
 async def _verify_detour(api, d, cand, vot, at=None):
     """C 후보 확인 — 돌아가기 시작하는 정류장까지는 기준 경로 시간(`head_s`), 거기서부터 온라인으로 잰다.
 
@@ -250,16 +256,16 @@ async def _verify_detour(api, d, cand, vot, at=None):
     """
     frm, pt = (cand["from_lon"], cand["from_lat"]), (cand["lon"], cand["lat"])
     if cand["via"] == "taxi_to_d":
-        car = await api.car(frm, d)
-        time_s = cand["head_s"] + anchors.taxi_plan_s(car["duration_s"], connect=False)
-        fare_info = anchors.candidate_fare(cand, anchors.taxi_plan_s(car["duration_s"], connect=False), at=at)
+        car = await _connection(api, cand, frm, d)
+        time_s = cand["head_s"] + anchors.connection_plan_s(cand, car["duration_s"], connect=False)
+        fare_info = anchors.candidate_fare(cand, anchors.connection_plan_s(cand, car["duration_s"], connect=False), at=at)
         fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
         return {"cand": cand, "time_s": time_s, "fare": fare, "fare_info": fare_info, "note": fare_info["reason"]}
-    car, leg = await asyncio.gather(api.car(frm, pt), api.transit(pt, d))
+    car, leg = await asyncio.gather(_connection(api, cand, frm, pt), api.transit(pt, d))
     legs = leg.get("routes") or []
     if not legs:
         return {"cand": cand, "time_s": None, "fare": None, "note": leg.get("status")}
-    plan = anchors.taxi_plan_s(car["duration_s"], connect=True)
+    plan = anchors.connection_plan_s(cand, car["duration_s"], connect=True)
     options = [(compare.reconstruct(r, pt, d), anchors.candidate_fare(cand, plan, tail=r, at=at)) for r in legs]
     best, fare_info = min(options, key=lambda x: compare.gc_s(x[0]["time_s"], x[1]["value"], vot))
     fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
@@ -278,38 +284,38 @@ async def _verify_one(api, o, d, cand, vot, at=None):
     if cand["hybrid"] == "C":
         return await _verify_detour(api, d, cand, vot, at)
     if cand["hybrid"] == "A":
-        car, leg = await asyncio.gather(api.car(o, pt), api.transit(pt, d))
+        car, leg = await asyncio.gather(_connection(api, cand, o, pt), api.transit(pt, d))
         legs = leg.get("routes") or []
         if not legs:
             return {"cand": cand, "time_s": None, "fare": None, "note": leg.get("status")}
         best = min((compare.reconstruct(r, pt, d) for r in legs),
                    key=lambda b: compare.gc_s(b["time_s"], b["fare"], vot))
-        time_s = anchors.taxi_connect_s(car["duration_s"]) + best["time_s"]
+        time_s = anchors.connection_plan_s(cand, car["duration_s"], connect=True) + best["time_s"]
         fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (best["fare"] or 0)
     elif cand["strategy"] == "b":
         # (b)의 B 는 기준 경로에 없는 노선을 찾아낸 것이라 앞 구간도 확인해야 한다
-        leg, car = await asyncio.gather(api.transit(o, pt), api.car(pt, d))
+        leg, car = await asyncio.gather(api.transit(o, pt), _connection(api, cand, pt, d))
         legs = leg.get("routes") or []
         if not legs:
             return {"cand": cand, "time_s": None, "fare": None, "note": leg.get("status")}
         best = min((compare.reconstruct(r, o, pt) for r in legs),
                    key=lambda b: compare.gc_s(b["time_s"], b["fare"], vot))
-        time_s = best["time_s"] + anchors.taxi_plan_s(car["duration_s"], connect=False)
+        time_s = best["time_s"] + anchors.connection_plan_s(cand, car["duration_s"], connect=False)
         fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (best["fare"] or 0)
     elif cand["hybrid"] == "D":
         # 공백 한 구간만 택시로 — 나머지는 기준 경로에 그대로 있다. 내려서 다시 차를 타면 연결 버퍼를 씌운다
-        car = await api.car((cand["from_lon"], cand["from_lat"]), pt)
+        car = await _connection(api, cand, (cand["from_lon"], cand["from_lat"]), pt)
         eta = car["duration_s"] or 0
         time_s = (cand["base_time_s"] - cand["gap_s"]
-                  + anchors.taxi_plan_s(eta, connect=cand["resume_ride"]))
-        fare_info = anchors.candidate_fare(cand, anchors.taxi_plan_s(eta, connect=cand["resume_ride"]), at=at)
+                  + anchors.connection_plan_s(cand, eta, connect=cand["resume_ride"]))
+        fare_info = anchors.candidate_fare(cand, anchors.connection_plan_s(cand, eta, connect=cand["resume_ride"]), at=at)
         fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
     else:
         # (a)의 B 는 앞 구간이 기준 경로에 그대로 있다 — 대중교통 콜이 들지 않는다
-        car = await api.car(pt, d)
+        car = await _connection(api, cand, pt, d)
         time_s = (cand["ride_s"] + (cand["wait_s"] or 0) + cand["walk_s"]
-                  + anchors.taxi_plan_s(car["duration_s"], connect=False))
-        fare_info = anchors.candidate_fare(cand, anchors.taxi_plan_s(car["duration_s"], connect=False), at=at)
+                  + anchors.connection_plan_s(cand, car["duration_s"], connect=False))
+        fare_info = anchors.candidate_fare(cand, anchors.connection_plan_s(cand, car["duration_s"], connect=False), at=at)
         fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
     return {"cand": cand, "time_s": time_s, "fare": fare, "fare_info": fare_info,
             "note": fare_info["reason"] if fare_info else ""}
@@ -319,9 +325,9 @@ def _report(rows, base, vot):
     """검증 결과 → Pareto · 원/분 · 구조 다양성."""
     ok = [r for r in rows if r["time_s"] is not None]
     # 택시를 쓰는 최소 기준 — 같은 잣대의 기준선보다 5분 이상 빠르지 않은 후보는 보여 주지 않는다
-    little = [r for r in ok if not compare.saves_enough(r["time_s"], base["time_s"])]
+    little = [r for r in ok if not compare.saves_enough(r["time_s"], base["time_s"], walking=r["cand"].get("link_mode") == "WALKING")]
     if little:
-        print("  기준선보다 %d분 이상 빠르지 않아 뺀 후보 %d개" % (anchors.TAXI_MIN_SAVING_S // 60, len(little)))
+        print("  시간 절약 기준 미달로 뺀 후보 %d개 (택시 %d분 이상, 도보 0분 초과)" % (len(little), anchors.TAXI_MIN_SAVING_S // 60))
     ok = [r for r in ok if r not in little]
     for r in ok:
         r["hybrid"] = r["cand"]["hybrid"]

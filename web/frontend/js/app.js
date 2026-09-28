@@ -31,7 +31,8 @@ const state = {
   hybridBusy: false,
   picked: null, // 검색해서 고른 장소 {latlng, name} — 검색창 옆 [출발][도착]이 쓴다
   tab: "all",   // 결과 탭: all · 버스 · 지하철 · 버스+지하철 · hybrid
-  sort: "time",
+  sort: "optimal",
+  vot: 500,
   transitAt: 0, // [경로 검색] 결과를 받은 시각 (하이브리드가 다시 쓸 수 있는지)
 };
 let seq = 0; // 좌표가 바뀔 때마다 증가 — 늦게 도착한 이전 검색 결과는 버린다
@@ -85,10 +86,23 @@ const view = createMap($("map"), { onError: (err) => showBanner(err), onPlaceCli
 R.initRoutes(view);
 initStopRoutes(view);
 document.addEventListener('arrivals-quota', event => renderQuota(event.detail));
-initLocation(view.map, (latlng) => {
+const locationControl = initLocation(view.map, (latlng) => {
   document.activeElement?.blur();
-  openOdMenu(latlng);
+  const picked = { latlng, name: fmtLL(latlng) };
+  state.picked = picked;
+  placeSearch.setValue("내 위치");
+  syncPickButtons();
+  const box = openOdMenu(latlng, null, null, address => {
+    if (state.picked !== picked) return;
+    picked.name = address || fmtLL(latlng);
+    placeSearch.setValue(picked.name);
+  });
+  for (const b of box.querySelectorAll("[data-role]")) b.addEventListener("click", afterPick);
 }, R.updatePosition);
+$("search-location").addEventListener("click", () => {
+  document.activeElement?.blur();
+  locationControl.pick();
+});
 
 let panelMapOffset = 0;
 function updateMapLayout() {
@@ -210,7 +224,7 @@ function update() {
   // 한 번 찾으면 출발·도착이 바뀔 때까지 잠근다 — 같은 조건으로 다시 찾으면 쿼터만 쓴다(실패했으면 다시 시도할 수 있게 둔다)
   hy.disabled = state.busy || state.hybridBusy || !!state.hybrid || !(state.origin && state.dest);
   hy.textContent = state.hybridBusy ? "앵커 확인 중…"
-    : state.hybrid ? `하이브리드 경로 검색 완료 (${state.hybrid.routes.length}개)` : "하이브리드 경로 검색";
+    : state.hybrid ? `하이브리드\n탐색 완료 (${state.hybrid.routes.length}개)` : "하이브리드\n경로 탐색";
 }
 
 // keepHybrid — 같은 출발·도착으로 다시 검색할 때 찾은 하이브리드는 남긴다(버튼도 잠근 채)
@@ -252,7 +266,7 @@ const placeLabel = (p) => (p.line && !p.name.endsWith("역") ? `${p.name}역` : 
 // 버스 정류장이면 아래에 경유 노선 칩이 붙는다(누르면 그 노선의 정류장을 지도에 강조 — stoproutes.js).
 // 경유는 넣지 않는다 — 카카오 대중교통 API 에 경유지 파라미터가 없다 (method.md E9).
 // label = 고른 자리를 출발·도착 옆에 보일 이름 (출발·도착 표지를 눌렀을 때 그 이름을 이어받는다)
-function openOdMenu(latlng, place = null, label = null) {
+function openOdMenu(latlng, place = null, label = null, onAddress = null) {
   const box = document.createElement("div");
   box.className = "odm";
   // 지하철역이면 이름 앞에 노선 이름 칩(노선 색), 정류장이면 색 점. 검색 결과는 이름만
@@ -318,6 +332,7 @@ function openOdMenu(latlng, place = null, label = null) {
     const address = box.querySelector(".odm-address");
     getJSON("/api/reverse-address", { lon: latlng.lng, lat: latlng.lat }).then((result) => {
       if (result.quota) renderQuota(result.quota);
+      onAddress?.(result.address);
       if (!popup.isOpen()) return;
       label = result.address || null;
       address.textContent = label || `주소 없음 · ${fmtLL(latlng)}`;
@@ -325,6 +340,7 @@ function openOdMenu(latlng, place = null, label = null) {
       popup.update();
       focused?.focus({ preventScroll: true });
     }).catch(() => {
+      onAddress?.(null);
       if (!popup.isOpen()) return;
       address.textContent = `주소 확인 실패 · ${fmtLL(latlng)}`;
       popup.update();
@@ -365,7 +381,11 @@ $("btn-search").addEventListener("click", search);
 $("btn-hybrid").addEventListener("click", runHybrid);
 
 function drawHybrid() {
-  renderHybrid($("hybrid-body"), state.hybrid, selectHybrid);
+  const baseline = state.transit?.baseline;
+  renderHybrid($("hybrid-body"), baseline ? { ...state.hybrid, baseline: {
+    ...baseline, route: state.transit.routes[state.transit.baseline_index],
+  }, vot: state.vot } : { ...state.hybrid, vot: state.vot }, selectHybrid);
+  updateCarCard();
 }
 
 // --- 검색 ---
@@ -405,6 +425,14 @@ async function search() {
 // 하이브리드 영역(버튼 · 기준선 요약)은 전체 · 하이브리드 탭에서 목록 위에 보인다
 const TRANSIT_TABS = ["버스", "지하철", "버스+지하철"];
 
+$("route-vot").addEventListener("input", event => {
+  state.vot = Number(event.target.value);
+  $("vot-value").textContent = `${state.vot.toLocaleString("ko-KR")}원/분`;
+  R.setRouteView({ vot: state.vot });
+  if (state.hybrid) drawHybrid();
+  else updateCarCard();
+});
+
 function showResultsBar() {
   const sel = $("route-sort");
   if (!sel.options.length) {
@@ -412,9 +440,11 @@ function showResultsBar() {
     sel.addEventListener("change", () => {
       state.sort = sel.value; // 정렬만 바꾸고 선택한 경로는 그대로
       R.setRouteView({ sort: state.sort });
+      $("vot-control").hidden = state.sort !== "optimal";
     });
   }
   sel.value = state.sort;
+  $("vot-control").hidden = state.sort !== "optimal";
   $("route-bar").hidden = false;
   applyTab();
 }
@@ -459,6 +489,7 @@ function showTransit(res) {
     return;
   }
   const t = (state.transit = res.value);
+  updateCarCard();
   state.transitAt = Date.now();
   if (t.quota) renderQuota(t.quota);
   renderProbe(t.probe);
@@ -469,7 +500,7 @@ function showTransit(res) {
   }
   // 결과 머리의 탭·정렬로 그리고 보이는 첫 경로를 고른다. 출발·도착은 첫·끝 도보 거리 추정용
   R.renderRouteCards(body, t, selectRoute, { origin: state.origin, dest: state.dest,
-    group: state.tab === "all" ? null : state.tab, sort: state.sort,
+    group: state.tab === "all" ? null : state.tab, sort: state.sort, vot: state.vot,
     autoSelect: !matchMedia("(max-width: 720px)").matches });
 }
 
@@ -502,7 +533,6 @@ function revealSelectedCard() {
 // 버튼을 눌렀을 때만 부른다 — 서버가 앵커마다 카카오를 부르므로 쿼터를 크게 쓴다
 async function runHybrid() {
   if (state.busy || state.hybridBusy || state.hybrid || !state.origin || !state.dest) return;
-  state.tab = "hybrid";
   panel.showResults();
   showResultsBar();
   const my = seq;
@@ -549,7 +579,7 @@ function selectHybrid(i) {
   const [from, to] = r.hybrid === "A" ? [at, state.dest] : r.hybrid === "B" ? [state.origin, at] : [state.origin, state.dest];
   panel.showSelection(() => {
     if (r.transit) R.drawRoute(r.transit, from, to);
-    R.drawCar(r.taxi, { fit: true });
+    R.drawCar(r.walking || r.taxi, { fit: true, walking: !!r.walking });
     revealSelectedCard();
   });
 }
@@ -570,7 +600,23 @@ function showCar(res) {
   }
   const car = (state.car = res.value);
   if (car.quota) renderQuota(car.quota);
-  R.renderCarCard(body, car, toggleCar); // 처음엔 꺼짐 — 카드를 눌러야 지도에 그린다
+  updateCarCard(); // 처음엔 꺼짐 — 카드를 눌러야 지도에 그린다
+}
+
+function updateCarCard() {
+  const entries = (state.transit?.routes || []).map((r, i) => ({
+    key: `t:${i}`, time_s: r.total_with_wait_s ?? r.comparison?.time_s, fare: r.fare?.value ?? r.fare?.min,
+  }));
+  entries.push(...(state.hybrid?.routes || []).map((r, i) => ({ key: `h:${i}`, time_s: r.time_s, fare: r.fare })));
+  if (state.car?.result_code != null && Number(state.car.result_code) === 0
+      && [state.car.fare?.taxi, state.car.fare?.toll].every(Number.isFinite)) {
+    entries.push({ key: "car", time_s: state.car.duration_s, fare: state.car.fare.taxi + state.car.fare.toll });
+  }
+  R.setRecommendation(entries, state.vot);
+  if (!state.car) return;
+  const body = $("car-body");
+  R.renderCarCard(body, state.car, toggleCar, state.transit?.baseline || state.hybrid?.baseline, state.vot);
+  R.markCarSelected(body, state.carOn);
 }
 
 // 택시도 다른 경로와 하나만 선택한다. 다시 누르면 선택을 해제한다.

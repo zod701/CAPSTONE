@@ -29,3 +29,7 @@ web/backend/var/
 
 # 앵커 탐색 산출물 (CLI 로 다시 만든다)
 algo/out/
+
+# 기타 파일
+explain_mat/
+tmp/

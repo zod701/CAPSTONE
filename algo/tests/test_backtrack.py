@@ -515,12 +515,15 @@ def test_first_leg_gap_has_no_transfer_to_keep():
 from algo.anchors import TAXI_MIN_M   # noqa: E402
 
 
-def test_backtrack_skips_taxi_shorter_than_the_minimum_distance():
+def test_backtrack_replaces_short_taxi_with_walking():
     # 출발지에서 800 m 떨어진 승차 지점까지 택시를 타지는 않는다 — 기본거리도 안 되는 거리다
     near = move(O, 800, 0)
     cands, diag = run(bus=[bstop("n", near), bstop("q", Q)],
                       routes=[rrow("r1", 1, "n", near), rrow("r1", 2, "q", Q)])
-    assert (cands, diag["too_short"]) == ([], 1) and 800 < TAXI_MIN_M
+    candidate, = cands
+    assert candidate["link_mode"] == "WALKING" and diag["walk_replacement"] == 1
+    assert candidate["link_walk_s"] == pytest.approx(800 * 1.39 / 0.83, rel=1e-4)
+    assert candidate["taxi_s"] == candidate["fare"] == 0
 
 
 def test_gap_skips_taxi_that_saves_too_little():

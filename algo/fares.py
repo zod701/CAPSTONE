@@ -4,6 +4,7 @@
 정산 확정값이 아니다. 식별 불가·별도운임은 원래 경로 요금으로 대체하고 사유를 남긴다.
 """
 import math
+from itertools import product
 from datetime import timedelta
 
 from app.wait import DEFAULT_WAIT_S
@@ -91,6 +92,26 @@ def _single(leg):
 
 
 def estimate(steps, fallback, *, at=None, initial_walk_s=0):
+    """승차 노선 조합별 전체 요금을 계산한다. 미지원 조합이 있으면 기존 대체 방식을 유지한다."""
+    choices = [[{**step, "fare_routes": [route]} for route in step["fare_routes"]]
+               if step["type"] == "BUS" and len(step.get("fare_routes") or []) > 1 else [step]
+               for step in steps]
+    if all(len(options) == 1 for options in choices):
+        return _estimate(steps, fallback, at=at, initial_walk_s=initial_walk_s)
+    low, high = math.inf, -math.inf
+    transfer_states = set()
+    for selected in product(*choices):
+        result = _estimate(selected, fallback, at=at, initial_walk_s=initial_walk_s)
+        if result["source"] == "fallback":
+            return _estimate(steps, fallback, at=at, initial_walk_s=initial_walk_s)
+        low, high = min(low, result["value"]), max(high, result["value"])
+        transfer_states.add(result["transfer_kept"])
+    return {"value": high, "min": low, "max": high, "source": "rules_range",
+            "transfer_kept": next(iter(transfer_states)) if len(transfer_states) == 1 else None,
+            "reason": "성인 교통카드 · 노선 조합별 거리·환승·조조 요금 계산 · 택시 별도 결제 가정 · 비교는 최대 요금 기준"}
+
+
+def _estimate(steps, fallback, *, at=None, initial_walk_s=0):
     """보존/절단한 steps + TAXI(time_s) → 요금과 출처. 택시 요금·거리는 합산하지 않는다.
 
     TAXI 시간은 호출 대기·연결 버퍼까지 포함한다. 도보·대기·택시 시간은 환승 시한에만
@@ -165,9 +186,11 @@ def candidate_fare(cand, taxi_plan_s, *, tail=None, at=None):
         return {"value": fallback, "source": "fallback", "reason": "요금 계산용 구간 정보 없음"}
     steps = []
     for step in cand["fare_steps"]:
-        steps.append({**step, "time_s": taxi_plan_s} if step["type"] == "TAXI" else step)
+        steps.append({**step, "time_s": taxi_plan_s, "connection": True,
+                      "type": "WALKING" if cand.get("link_mode") == "WALKING" else "TAXI"}
+                     if step["type"] == "TAXI" else step)
     if tail is not None:
-        steps = steps[:next(i for i, s in enumerate(steps) if s["type"] == "TAXI") + 1]
+        steps = steps[:next(i for i, s in enumerate(steps) if s.get("connection") or s["type"] == "TAXI") + 1]
         first = next((s for s in tail["steps"] if s["type"] in ("BUS", "SUBWAY")), None)
         board = _chosen(first, "board") if first else None
         if board and "lon" in cand and "lat" in cand:
@@ -178,7 +201,7 @@ def candidate_fare(cand, taxi_plan_s, *, tail=None, at=None):
     result = estimate(steps, fallback, at=at, initial_walk_s=cand.get("fare_initial_walk_s", 0))
     if result["source"] == "fallback" and cand.get("hybrid") == "D":
         # 정보가 없으면 할인은 확정하지 않는다. 남은 앞·뒤 경로를 각각 계산/대체한다.
-        cut = next(i for i, s in enumerate(steps) if s["type"] == "TAXI")
-        result["value"] = sum(estimate(part, fallback)["value"] for part in (steps[:cut], steps[cut + 1:]))
-        result["reason"] += " · 택시 앞뒤 할인 미적용 대체값"
+        cut = next(i for i, s in enumerate(steps) if s.get("connection") or s["type"] == "TAXI")
+        result["value"] = sum(_estimate(part, fallback)["value"] for part in (steps[:cut], steps[cut + 1:]))
+        result["reason"] += " · 연결 앞뒤 할인 미적용 대체값"
     return result

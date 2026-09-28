@@ -105,6 +105,62 @@ def test_missing_distance_is_not_zero_and_empty_prefix_is_free():
     assert value([]) == 0
 
 
+def test_bus_choices_price_the_whole_transfer_chain_without_mutation():
+    step = bus(8, "gg")
+    step["fare_routes"] += bus(8, "seoul", kind="지선", source="seoul")["fare_routes"]
+    result = estimate([step, rail(8)], 9999, at=DAY)
+    assert (result["min"], result["max"], result["value"]) == (1750, 1850, 1850)
+    assert result["source"] == "rules_range"
+    assert len(step["fare_routes"]) == 2
+
+
+def test_same_tariff_choices_still_resolve_same_bus_reboarding():
+    step = bus(1, "a")
+    step["fare_routes"] += bus(1, "b")["fare_routes"]
+    result = estimate([step, bus(1, "a")], 9999, at=DAY)
+    assert (result["min"], result["max"]) == (1650, 3300)
+
+
+def test_bus_choices_can_have_identical_final_fares():
+    step = bus(1, "a", kind="마을", source="seoul")
+    step["fare_routes"] += bus(1, "b", kind="지선", source="seoul")["fare_routes"]
+    result = estimate([step, rail(1)], 9999, at=DAY)
+    assert (result["min"], result["max"]) == (1550, 1550)
+
+
+def test_unknown_choice_keeps_existing_fallback():
+    step = bus(8)
+    step["fare_routes"] += bus(8, "unknown", kind="공항")["fare_routes"]
+    result = estimate([step, rail(8)], 4200, at=DAY)
+    assert result["source"] == "fallback" and result["value"] == 4200
+    assert "min" not in result and "max" not in result
+
+
+def test_multiple_boarding_choices_and_candidate_range():
+    first = bus(8, "a")
+    first["fare_routes"] += bus(8, "b", kind="지선", source="seoul")["fare_routes"]
+    second = bus(8, "c")
+    second["fare_routes"] += bus(8, "d", kind="지선", source="seoul")["fare_routes"]
+    cand = {"hybrid": "D", "transit_fare_cap": 4200,
+            "fare_steps": [first, {"type": "TAXI", "time_s": 0}, second]}
+    result = candidate_fare(cand, 600, at=DAY)
+    assert (result["min"], result["max"], result["value"]) == (1700, 1850, 1850)
+    assert result["transfer_kept"] is True
+    expired = candidate_fare(cand, 1801, at=DAY)
+    assert (expired["min"], expired["max"]) == (3000, 3300)
+    assert expired["transfer_kept"] is False
+
+
+def test_d_unknown_choice_keeps_original_split_fallback():
+    first = bus(8, "a")
+    first["fare_routes"] += bus(8, "unknown", kind="공항")["fare_routes"]
+    cand = {"hybrid": "D", "transit_fare_cap": 4200,
+            "fare_steps": [first, {"type": "TAXI", "time_s": 0}, bus(8, "b")]}
+    result = candidate_fare(cand, 600, at=DAY)
+    assert result["source"] == "fallback" and result["value"] == 5850
+    assert "min" not in result
+
+
 def test_midride_prefix_uses_fractional_distance_without_mutating_original():
     locs = [{"id": str(i), "name": str(i), "lon": 127 + i * .1, "lat": 37} for i in range(3)]
     step = {**bus(30), "stop_locs": locs, "stops": [str(i) for i in range(3)]}

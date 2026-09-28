@@ -29,8 +29,8 @@ function setup({ secure = true, supported = true } = {}) {
       latLng: (lat, lng) => ({ lat, lng }), divIcon: v => v, circle: layer, marker: layer },
   });
   vm.runInContext(source, context);
-  context.initLocation(map, p => picks.push(p), p => positions.push(p));
-  return { elements, layers, watches, cleared, picks, moves, positions, document, window,
+  const control = context.initLocation(map, p => picks.push(p), p => positions.push(p));
+  return { control, elements, layers, watches, cleared, picks, moves, positions, document, window,
     fix: (lat = 37.5) => watches.at(-1).ok({ coords: { latitude: lat, longitude: 127, accuracy: 15 } }) };
 }
 
@@ -62,6 +62,30 @@ test('my location button zooms to latest fix without opening a popup or duplicat
   assert.equal(s.watches.length, 2);
   s.fix(37.8);
   assert.equal(s.moves.at(-1)[0].lat, 37.8);
+});
+
+test('search location opens the picker once after a pending fix or immediately at the latest fix', () => {
+  const s = setup();
+  s.control.pick();
+  assert.equal(s.picks.length, 0);
+  s.fix(37.5);
+  assert.equal(s.picks.length, 1);
+  s.fix(37.7);
+  assert.equal(s.picks.length, 1);
+  s.control.pick();
+  assert.equal(s.picks.length, 2);
+  assert.equal(s.picks.at(-1).lat, 37.7);
+  assert.equal(s.moves.at(-1)[0].lat, 37.7);
+  assert.equal(s.watches.length, 1);
+});
+
+test('failed location request clears the pending picker', () => {
+  const s = setup();
+  s.control.pick();
+  s.watches[0].fail({ code: 1 });
+  s.control.recenter();
+  s.fix();
+  assert.equal(s.picks.length, 0);
 });
 
 test('background pauses and resumes tracking without recentering, ignoring late fixes', () => {

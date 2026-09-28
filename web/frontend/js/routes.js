@@ -162,7 +162,7 @@ function waitText(r) {
     + (per ? `
 구간 배차: ${per}` : "") + (basis ? `
 기준: ${basis}` : "");
-  return `<span class="rc-wait" title="${esc(why)}">대기 포함 ${fmtMin(r.total_with_wait_s)}</span>`;
+  return `API 소요시간 ${fmtMin(r.total_time_s)} · ${why}`;
 }
 
 function fareText(f) {
@@ -249,7 +249,8 @@ export function chips(route) {
 // --- 대중교통 카드: 종류별 탭(전체 · 버스 · 지하철 · 버스+지하철) + 정렬 ---
 
 const SORTS = [ // [값, 이름, 기준(경로, 번호)] — 기준이 없으면 맨 뒤, 같으면 소요 시간 → 카카오 순서
-  ["time", "최소 시간순", (r) => r.total_time_s],
+  ["optimal", "최적", (r) => optimalCost(r.total_with_wait_s ?? r.comparison?.time_s, r.fare?.value ?? r.fare?.min, cards.vot)],
+  ["time", "최소 시간순", (r) => r.total_with_wait_s ?? r.total_time_s],
   ["fare", "최소 비용순", (r) => r.fare?.value ?? r.fare?.min], // 요금이 범위(min–max)로 오면 낮은 쪽
   ["distance", "최소 거리순", (r) => r.total_distance_m],
   ["transfers", "최소 환승순", (r) => r.transfers],
@@ -274,10 +275,11 @@ export function resetRouteCards() {
 
 // 결과 머리의 탭(group: null = 전체 · "hybrid" · 대중교통 종류 이름)·정렬로 목록을 다시 그린다
 // → 보이는 대중교통 경로 번호(정렬 순서). 목록이 없으면 []
-export function setRouteView({ group, sort } = {}) {
+export function setRouteView({ group, sort, vot } = {}) {
   if (!cards) return [];
   if (group !== undefined) cards.group = group;
   if (sort !== undefined) cards.sort = sort;
+  if (vot !== undefined) cards.vot = vot;
   drawCards();
   return visibleEntries().filter((e) => e.kind === "t").map((e) => e.i);
 }
@@ -305,9 +307,9 @@ const numOr = (x) => (typeof x === "number" && Number.isFinite(x) ? x : Infinity
 
 // 경로 목록을 그리고, 보이는 첫 경로를 고른다(onSelect). 카드의 data-i 는 transit.routes 의 원래 번호.
 // group·sort 는 결과 머리의 탭·정렬(탭 전환은 setRouteView). origin·dest(검색한 출발·도착)는 첫·끝 도보 거리 추정에 쓴다.
-export function renderRouteCards(el, transit, onSelect, { origin = null, dest = null, group = null, sort = SORTS[0][0], autoSelect = true } = {}) {
+export function renderRouteCards(el, transit, onSelect, { origin = null, dest = null, group = null, sort = SORTS[0][0], vot = 500, autoSelect = true } = {}) {
   cards = { el, transit, onSelect, walk: transit.routes.map((r) => walkMeters(r, origin, dest)),
-    group, sort, expanded: null, selected: null, extras: [] };
+    group, sort, vot, expanded: null, selected: null, extras: [] };
   el.innerHTML = '<div class="rt-list"></div>';
   drawCards();
   const first = visibleEntries().find((e) => e.kind === "t");
@@ -315,20 +317,38 @@ export function renderRouteCards(el, transit, onSelect, { origin = null, dest = 
 }
 
 // 하이브리드 경로에 있는 정렬 기준 — 거리·환승·도보는 값이 없어 맨 뒤로 간다(기준이 없으면 맨 뒤)
-const EXTRA_SORT = { time: (x) => x.time_s, fare: (x) => x.fare };
+function optimalCost(time, fare, vot) {
+  return [time, fare, vot].every(Number.isFinite) ? fare + time / 60 * vot : Infinity;
+}
+let recommendedKey = null;
+export function bestRecommendation(entries, vot) {
+  return entries.filter(r => Number.isFinite(optimalCost(r.time_s, r.fare, vot)))
+    .sort((a, b) => optimalCost(a.time_s, a.fare, vot) - optimalCost(b.time_s, b.fare, vot)
+      || a.time_s - b.time_s || a.fare - b.fare)[0]?.key ?? null;
+}
+export function setRecommendation(entries, vot) {
+  recommendedKey = bestRecommendation(entries, vot);
+  paintRecommendation();
+}
+function paintRecommendation() {
+  document.querySelectorAll('[data-recommendation]').forEach(el => {
+    el.hidden = el.dataset.recommendation !== recommendedKey;
+  });
+}
+export function recommendationBadge(key) {
+  return `<span class="badge ok" data-recommendation="${key}" ${key === recommendedKey ? "" : "hidden"}>추천</span>`;
+}
+const EXTRA_SORT = { time: (x) => x.time_s, fare: (x) => x.fare, optimal: (x) => optimalCost(x.time_s, x.fare, cards.vot) };
 
 // 지금 탭의 경로를 정렬 순서대로 → [{kind "t"|"h", i, key}].
-// 전체 탭에서 하이브리드와 섞일 때 시간순은 대중교통도 **대기 포함 시간**(없으면 카카오 시간)으로 견준다 —
-// 하이브리드 시간에는 대기가 들어 있고 카카오 시간에는 없어(method.md E15) 그대로 섞으면 대중교통이 부당하게 앞선다.
-// 대중교통 종류 탭은 섞이지 않으니 카카오 시간 그대로다
+// 모든 탭에서 시간순과 동률 기준은 카드의 대기 포함 시간을 사용한다.
 function visibleEntries() {
   const { transit, group, sort, extras } = cards;
-  const mixed = group === null && extras.length > 0;
-  const tKey = mixed && sort === "time" ? (r) => r.total_with_wait_s ?? r.total_time_s : SORTS.find(([k]) => k === sort)[2];
+  const tKey = SORTS.find(([k]) => k === sort)[2];
   const out = [];
   if (group !== "hybrid") {
     transit.routes.forEach((r, i) => {
-      if (group === null || routeLabel(r) === group) out.push({ kind: "t", i, key: `t:${i}`, v: tKey(r, i), tie: r.total_time_s });
+      if (group === null || routeLabel(r) === group) out.push({ kind: "t", i, key: `t:${i}`, v: tKey(r, i), tie: r.total_with_wait_s ?? r.total_time_s });
     });
   }
   if (group === null || group === "hybrid") {
@@ -352,6 +372,7 @@ function drawCards() {
     });
   }
   paintSelected();
+  paintRecommendation();
   if (shown.some((e) => e.key === cards.expanded)) expandCard(cards.expanded, false);
   else cards.expanded = null;
 }
@@ -368,13 +389,15 @@ function selectEntry(key) {
 }
 
 function routeCardHTML(r, i) {
+  const comparison = i === cards.transit.baseline_index ? "" : comparisonText(r.comparison, cards.transit.baseline);
   return `
     <div class="route-card" data-i="${i}" data-key="t:${i}">
       <button type="button" class="rc-head" aria-expanded="false">
         <span class="rc-top"><b class="rc-type">${esc(routeLabel(r))}</b>
-          <span class="rc-times"><b class="rc-time">${fmtMin(r.total_time_s)}</b>${waitText(r)}</span>${matchBadge(r.diag_summary)}</span>
+          <span class="rc-times"><b class="rc-time" title="${esc(waitText(r))}">${fmtMin(r.total_with_wait_s ?? r.total_time_s)}</b><span class="rc-wait">도보·대기 포함</span></span>${matchBadge(r.diag_summary)}${recommendationBadge(`t:${i}`)}</span>
         <span class="rc-meta">${esc(fareText(r.fare))} · 환승 ${esc(r.transfers ?? "–")}회 · ${fmtKm(r.total_distance_m)} · 도보 약 ${fmtDist(cards.walk[i])}</span>
         ${defaultWaitText(r)}
+        ${comparison ? `<span class="rc-meta hy-vs" title="최소시간 대중교통 대비">${comparison}</span>` : ""}
         <span class="rc-chips">${chips(r)}</span>
       </button>
       <div class="rc-detail" hidden></div>
@@ -671,14 +694,15 @@ export function clearTransit() {
 // --- 택시 ---
 
 // fit: 택시 경로와 지도에 켜진 대중교통 경로가 함께 보이게 맞춘다
-export function drawCar(car, { fit = false } = {}) {
+export function drawCar(car, { fit = false, walking = false } = {}) {
   const g = v.carGroup;
   const renderer = v.renderers.car;
   g.clearLayers();
   if (car?.path?.length >= 2) {
     const latlngs = car.path.map(ll);
-    L.polyline(latlngs, { color: "#000000", weight: 7, opacity: 0.85, renderer, interactive: false }).addTo(g);
-    L.polyline(latlngs, { color: COLOR.TAXI, weight: 4, opacity: 1, renderer, interactive: false }).addTo(g);
+    if (!walking) L.polyline(latlngs, { color: "#000000", weight: 7, opacity: 0.85, renderer, interactive: false }).addTo(g);
+    L.polyline(latlngs, { color: walking ? COLOR.WALKING : COLOR.TAXI, weight: 4,
+      dashArray: walking ? "6 6" : null, opacity: 1, renderer, interactive: false }).addTo(g);
     if (fit) v.map.fitBounds(extendWith(L.latLngBounds(latlngs), v.transitGroup), FIT);
   }
   syncAttribution();
@@ -696,16 +720,37 @@ export function clearCar() {
 }
 
 // 택시 카드: 누르면 지도에 경로를 켜고, 다시 누르면 끈다. 처음엔 꺼짐.
-export function renderCarCard(el, car, onToggle) {
+export function comparisonText(route, base) {
+  if (![route?.time_s, route?.fare, base?.time_s, base?.fare].every(Number.isFinite)) return "";
+  const saved = base.time_s - route.time_s;
+  const extra = route.fare - base.fare;
+  if (saved < 0 && extra > 0) return "";
+  const parts = [saved === 0 ? "소요시간 동일" : saved > 0 ? `${fmtMin(saved)} 단축` : `${fmtMin(-saved)} 더 걸림`,
+    extra === 0 ? "요금 동일" : extra > 0 ? `${fmtWon(extra)} 추가` : `${fmtWon(-extra)} 절약`];
+  if (saved !== 0 && extra !== 0) {
+    const rate = fmtWon(Math.round(Math.abs(extra) / (Math.abs(saved) / 60)));
+    parts.push(`${saved > 0 ? "단축" : "추가"} 1분당 ${rate} ${extra > 0 ? "추가" : "절약"}`);
+  }
+  return parts.join(" · ");
+}
+
+export function taxiComparisonText(car, base) {
+  if (![car.fare?.taxi, car.fare?.toll].every(Number.isFinite)) return "";
+  return comparisonText({ time_s: car.duration_s, fare: car.fare.taxi + car.fare.toll }, base);
+}
+
+export function renderCarCard(el, car, onToggle, baseline = null, vot = 500) {
   if (car.result_code == null || Number(car.result_code) !== 0) {
     el.innerHTML = `<p class="note">자동차 경로를 찾지 못했습니다: ${esc(car.result_msg || "사유 미상")}`
       + ` <small>(result_code ${esc(car.result_code)})</small></p>`;
     return;
   }
+  const comparison = taxiComparisonText(car, baseline);
   el.innerHTML = `<div class="route-card taxi-card">
     <button type="button" class="rc-head" aria-pressed="false">
-      <span class="rc-top"><b class="rc-type">택시</b><b class="rc-time">${fmtMin(car.duration_s)}</b></span>
+      <span class="rc-top"><b class="rc-type">택시</b><b class="rc-time">${fmtMin(car.duration_s)}</b>${recommendationBadge("car")}</span>
       <span class="rc-meta">거리 ${fmtKm(car.distance_m)} · 택시요금 ${fmtWon(car.fare?.taxi)} · 통행료 ${fmtWon(car.fare?.toll)}</span>
+      ${comparison ? `<span class="rc-meta hy-vs" title="최소시간 대중교통 대비">${comparison}</span>` : ""}
       <span class="muted">카카오모빌리티 제공</span>
     </button>
   </div>`;

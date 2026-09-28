@@ -25,6 +25,7 @@
       <div class="ac place-search">
       <input id="place-q" type="text" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="place-list"
              aria-label="주소·장소 검색" placeholder="주소·장소 검색" autocomplete="off" spellcheck="false" maxlength="100">
+      <button type="button" id="search-location" aria-label="내 위치로 지도 이동" title="내 위치로 지도 이동">내 위치</button>
       <ul id="place-list" class="ac-list" role="listbox" aria-label="검색 결과" hidden></ul>
       </div>
       <button type="button" id="pick-origin" class="pin od-origin od-pick" disabled
@@ -58,7 +59,7 @@
     </div>
     <div class="buttons">
       <button type="button" id="btn-search" class="primary" disabled>경로 검색</button>
-      <button type="button" id="btn-hybrid" hidden disabled>하이브리드 경로 검색</button>
+      <button type="button" id="btn-hybrid" hidden disabled>하이브리드<br>경로 탐색</button>
     </div>
   </section>
 
@@ -75,6 +76,10 @@
         <button type="button" class="rt-tab" role="tab" data-tab="hybrid" aria-selected="false">하이브리드<span class="rt-n"></span></button>
       </div>
       <label class="rt-sort"><select id="route-sort" aria-label="정렬"></select></label>
+      <label id="vot-control" class="vot-control" title="현재 조회된 경로의 정렬에 적용됩니다">
+        <span>시간 가치</span><input id="route-vot" type="range" min="0" max="1500" step="50" value="500" aria-label="시간 가치 (원/분)">
+        <output id="vot-value" for="route-vot">500원/분</output>
+      </label>
     </div>
     <div id="route-cards">
     <div id="car-body"></div>

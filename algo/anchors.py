@@ -190,6 +190,26 @@ def walk_s(dist_m):
     return dist_m * WALK_DETOUR / WALK_MPS
 
 
+def walking_connection(straight_m):
+    """최소 택시 거리 미만인 연결은 도보 후보로 남긴다."""
+    if straight_m >= TAXI_MIN_M:
+        return {}
+    return {"link_mode": "WALKING", "link_walk_s": walk_s(straight_m),
+            "link_walk_m": straight_m * WALK_DETOUR, "taxi_s": 0.0, "taxi_km": 0.0, "fare": 0.0}
+
+
+def connection_plan_s(cand, eta_s=None, *, connect=True):
+    if cand.get("link_mode") == "WALKING":
+        return cand["link_walk_s"]
+    return taxi_plan_s(cand["taxi_s"] if eta_s is None else eta_s, connect=connect)
+
+
+def walking_leg(cand, start, end):
+    """도보 API 대신 기존 직선거리 기반 근사. 자동차 API는 호출하지 않는다."""
+    return {"duration_s": cand["link_walk_s"], "distance_m": cand["link_walk_m"],
+            "fare": {"taxi": 0, "toll": 0}, "path": [list(start), list(end)], "source": "walk_estimate"}
+
+
 def ride_s(km, route_type=None, kind="bus"):
     """노선을 타고 가는 시간(초) 근사 — 운행 거리를 표정속도로 나눈다."""
     kmh = RAIL_KMH if kind == "subway" else BUS_KMH.get(route_type or "", BUS_KMH_DEFAULT)
@@ -429,7 +449,8 @@ def _new_cand(kind, hybrid, anchor, row, far, sgg_far, at):
             "lat": row["lat"], "lon": row["lon"], "sgg_nm": row.get("sgg_nm"),
             "line_group": row.get("line_group"),
             "taxi_km": km, "taxi_s": taxi_time_s(a[0], a[1], b[0], b[1]),
-            "fare": taxi_fare(km, sgg_from, sgg_to, at), "rides": []}
+            "fare": taxi_fare(km, sgg_from, sgg_to, at), "rides": [],
+            **walking_connection(haversine_m(a[0], a[1], b[0], b[1]))}
 
 
 def _ride(brief_id, name, rtype, p, p_row, q, q_row, n_stops, km, walk_m, kind="bus", source=None):
@@ -482,8 +503,7 @@ def propose_backtrack(stops, routes, lines, o, d, *, vot, hybrid="A", at=None, h
             continue
         akey, arow = (p, p_row) if hybrid == "A" else (q, q_row)
         if (near_o["bus"][p][1] if hybrid == "A" else near_d["bus"][q][1]) < TAXI_MIN_M:
-            diag["too_short"] += 1
-            continue
+            diag["walk_replacement"] += 1
         walk_m = near_d["bus"][q][1] if hybrid == "A" else near_o["bus"][p][1]
         cand = by_anchor.get(("bus", akey)) or _new_cand("bus", hybrid, akey, arow, far, sgg_far, at)
         by_anchor[("bus", akey)] = cand
@@ -497,8 +517,7 @@ def propose_backtrack(stops, routes, lines, o, d, *, vot, hybrid="A", at=None, h
         km = _chain_km(lines, cid, seq.index(p), seq.index(q))
         akey, arow = (p, p_row) if hybrid == "A" else (q, q_row)
         if (near_o["subway"][p][1] if hybrid == "A" else near_d["subway"][q][1]) < TAXI_MIN_M:
-            diag["too_short"] += 1
-            continue
+            diag["walk_replacement"] += 1
         walk_m = near_d["subway"][q][1] if hybrid == "A" else near_o["subway"][p][1]
         cand = by_anchor.get(("subway", akey)) or _new_cand("subway", hybrid, akey, arow, far, sgg_far, at)
         by_anchor[("subway", akey)] = cand
@@ -516,7 +535,7 @@ def propose_backtrack(stops, routes, lines, o, d, *, vot, hybrid="A", at=None, h
         cand["ride_id"], cand["ride_name"] = best["id"], best["name"]
         cand["transit_fare"] = best["fare"]
         cand["fare_step"] = {**best["fare_step"], "wait_s": wait}
-        cand["score_s"] = (taxi_plan_s(cand["taxi_s"], connect=hybrid == "A") + (wait if wait is not None else WAIT_UNKNOWN_S)
+        cand["score_s"] = (connection_plan_s(cand, connect=hybrid == "A") + (wait if wait is not None else WAIT_UNKNOWN_S)
                            + best["ride_s"] + best["walk_s"]
                            + (cand["fare"] + best["fare"]) / vot * 60.0)
         out.append(cand)
@@ -609,8 +628,7 @@ def propose_perturb(o, d, transit_routes, *, vot, sgg_o=None, sgg_d=None, at=Non
                 straight = (haversine_m(o[0], o[1], *pt) if hybrid == "A"
                             else haversine_m(pt[0], pt[1], d[0], d[1]))
                 if straight < TAXI_MIN_M:
-                    diag["too_short"] += 1
-                    continue
+                    diag["walk_replacement"] += 1
                 km = (taxi_dist_km(o[0], o[1], *pt) if hybrid == "A"
                       else taxi_dist_km(pt[0], pt[1], d[0], d[1]))
                 # 택시가 대신한 쪽 끝의 도보는 사라지고 반대쪽 끝 도보만 남는다 (응답에 없어 직선으로 추정한다)
@@ -630,14 +648,15 @@ def propose_perturb(o, d, transit_routes, *, vot, sgg_o=None, sgg_d=None, at=Non
                         "ride_id": None, "ride_name": (step.get("vehicles") or [{}])[0].get("name"),
                         "transit_fare_cap": fare_cap, "rides": [],
                         "route_index": route_index, "step_index": i}
+                cand.update(walking_connection(straight))
                 first = _edge_stop(steps, "board")
                 cand["fare_initial_walk_s"] = (walk_s(haversine_m(o[0], o[1], first["lon"], first["lat"]))
                                                if first and hybrid == "B" else 0)
-                taxi_step = {"type": "TAXI", "time_s": taxi_plan_s(taxi_s, connect=hybrid == "A")}
+                taxi_step = {"type": "TAXI", "time_s": connection_plan_s(cand, connect=hybrid == "A")}
                 cand["fare_steps"] = ([taxi_step] + rest) if hybrid == "A" else (rest + [taxi_step])
                 cand["fare_info"] = candidate_fare(cand, taxi_step["time_s"], at=at)
                 cand["score_s"] = (taxi_step["time_s"] + wait + cand["ride_s"]
-                                   + walk + (fare + cand["fare_info"]["value"]) / vot * 60.0)
+                                   + walk + (cand["fare"] + cand["fare_info"]["value"]) / vot * 60.0)
                 key = (cand["anchor"], hybrid)
                 diag["pairs"] += 1
                 if key not in best or cand["score_s"] < best[key]["score_s"]:
@@ -726,6 +745,8 @@ def propose_gap(o, d, transit_routes, *, vot, at=None, t_max_s=T_MAX_S, gap_min_
         fare_cap = route["fare"].get("value") or route["fare"].get("min")
         total = sum(s.get("time_s") or 0 for s in steps)
         edge = _edge_walk_s(steps, o, d)
+        if route.get("total_time_s") is not None:
+            edge = route["total_time_s"] - total   # 첫·끝 도보를 모두 유지하므로 API 잔차를 쓴다
         first = _edge_stop(steps, "board")
         head_walk = walk_s(haversine_m(o[0], o[1], first["lon"], first["lat"])) if first else 0.0
         base = total + edge + route["wait_s"]
@@ -741,16 +762,16 @@ def propose_gap(o, d, transit_routes, *, vot, at=None, t_max_s=T_MAX_S, gap_min_
             if taxi_s > t_max_s:
                 diag["too_far"] += 1
                 continue
-            if haversine_m(x["lon"], x["lat"], y["lon"], y["lat"]) < TAXI_MIN_M:
-                diag["too_short"] += 1
-                continue
+            walking = walking_connection(haversine_m(x["lon"], x["lat"], y["lon"], y["lat"]))
+            if walking:
+                diag["walk_replacement"] += 1
             km = taxi_dist_km(x["lon"], x["lat"], y["lon"], y["lat"])
             fare = taxi_fare(km, x.get("sgg_nm"), y.get("sgg_nm"), at)
             removed = g["removed_wait"] + g["removed_time"]
             # 다음 차에 타는 시각 = 출발 + 앞 차 하차까지 + 사이(도보·대기) + 택시 — 환승 인정 시간이 이 시각으로 갈린다
             offset = head_walk + g["head_s"] + g["link_s"]
-            taxi_plan = taxi_plan_s(taxi_s, connect=g["resume_ride"])
-            if removed - taxi_plan < TAXI_MIN_SAVING_S:     # 대신한 부분을 알므로 후보 단계에서 거른다
+            taxi_plan = connection_plan_s({"taxi_s": taxi_s, **walking}, connect=g["resume_ride"])
+            if not walking and removed - taxi_plan < TAXI_MIN_SAVING_S:     # 대신한 부분을 알므로 후보 단계에서 거른다
                 diag["saves_little"] += 1
                 continue
             cand = {"strategy": "a", "hybrid": "D", "gap": g["gap"], "gap_s": removed, "kind": g["kind"],
@@ -765,13 +786,14 @@ def propose_gap(o, d, transit_routes, *, vot, at=None, t_max_s=T_MAX_S, gap_min_
                     "transit_fare_cap": fare_cap,
                     "pre_ride": g["pre_ride"], "link_s": g["link_s"], "board_offset_s": offset, "rides": [],
                     "route_index": route_index, "step_index": g["i"]}
+            cand.update(walking)
             i = g["i"]
             cand["fare_steps"] = steps[:i] + [{"type": "TAXI", "time_s": taxi_plan}] + steps[i + 1:]
             cand["fare_initial_walk_s"] = head_walk
             cand["fare_info"] = candidate_fare(cand, taxi_plan, at=at)
             cand["transfer_kept"] = cand["fare_info"].get("transfer_kept")
             cand["transit_fare"] = cand["fare_info"]["value"]
-            cand["score_s"] = base - removed + taxi_plan + (fare + cand["transit_fare"]) / vot * 60.0
+            cand["score_s"] = base - removed + taxi_plan + (cand["fare"] + cand["transit_fare"]) / vot * 60.0
             diag["gaps_" + g["gap"]] += 1
             if cand["anchor"] not in best or cand["score_s"] < best[cand["anchor"]]["score_s"]:
                 best[cand["anchor"]] = cand
@@ -793,7 +815,7 @@ def _same_spot(a, b, near_m):
 
     C·D 는 택시의 **양끝이 모두 앵커**다. 도착점만 가깝고 출발점이 멀면 서로 다른 후보라 합치지 않는다.
     """
-    if a["hybrid"] != b["hybrid"]:
+    if a["hybrid"] != b["hybrid"] or a.get("link_mode", "TAXI") != b.get("link_mode", "TAXI"):
         return False
     if a["anchor"] == b["anchor"]:
         return True
@@ -1126,26 +1148,30 @@ def propose_detour(stops, routes, lines, o, d, transit_routes, *, vot, at=None, 
 
         # 1) 택시로 목적지까지
         taxi_s = taxi_time_s(p["lon"], p["lat"], d[0], d[1])
-        if haversine_m(p["lon"], p["lat"], d[0], d[1]) < TAXI_MIN_M:
-            diag["too_short"] += 1
-        elif taxi_s > t_max_s:
+        walking = walking_connection(haversine_m(p["lon"], p["lat"], d[0], d[1]))
+        if taxi_s > t_max_s and not walking:
             diag["too_far"] += 1
         else:
             km = taxi_dist_km(p["lon"], p["lat"], d[0], d[1])
             fare = taxi_fare(km, sgg_p, sgg_d, at_p)
-            time = head + taxi_plan_s(taxi_s, connect=False)
-            out.append(dict(base, via="taxi_to_d", anchor="%s>D" % p["id"], name="%s→목적지" % p["name"],
+            if walking:
+                fare = 0.0
+                diag["walk_replacement"] += 1
+            time = head + connection_plan_s({"taxi_s": taxi_s, **walking}, connect=False)
+            direct = dict(base, via="taxi_to_d", anchor="%s>D" % p["id"], name="%s→목적지" % p["name"],
                             kind=p["kind"], lon=d[0], lat=d[1], sgg_nm=sgg_p, taxi_s=taxi_s, taxi_km=km, fare=fare,
                             transit_fare=cap, transfer_kept=None, resume_ride=False, link_s=0.0,
-                            wait_s=None, ride_s=0.0, walk_s=0.0, ride_id="taxi:%s" % p["id"], ride_name="택시",
-                            rides=[], time_s=time, score_s=time + (fare + cap) / vot * 60.0))
+                            wait_s=None, ride_s=0.0, walk_s=0.0, ride_id="taxi:%s" % p["id"], ride_name="도보" if walking else "택시",
+                            rides=[], time_s=time, score_s=time + (fare + cap) / vot * 60.0)
+            direct.update(walking)
+            out.append(direct)
             diag["taxi_to_d"] += 1
 
         # 2) 그 정류장에서 목적지로 곧장 가는 노선 — 최소 거리·첫막차·요금은 (b) 가 그대로 따진다
         found, _ = propose_backtrack(stops, routes, lines, (p["lon"], p["lat"]), d, vot=vot, hybrid="A", at=at_p,
                                      headway=headway, phys=phys, hours=hours, t_max_s=t_max_s)
         for c in top_n(found, n_anchors):
-            plan = taxi_plan_s(c["taxi_s"], connect=True)
+            plan = connection_plan_s(c, connect=True)
             wait = c["wait_s"] if c["wait_s"] is not None else WAIT_UNKNOWN_S
             time = head + plan + wait + c["ride_s"] + c["walk_s"]
             cand = dict(c)

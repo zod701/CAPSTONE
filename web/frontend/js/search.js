@@ -218,5 +218,5 @@ export function createPlaceSearch(input, list, { onPick, onQuota = () => {} }) {
     if (!touchingList && !list.contains(e.relatedTarget)) close();
   });
 
-  return { focus: () => input.focus() };
+  return { focus: () => input.focus(), setValue: value => { close(); input.value = value; } };
 }
