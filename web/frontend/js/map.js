@@ -210,7 +210,26 @@ export function createMap(el, { onError = () => {}, onPlaceClick = () => {} } = 
     scheduleBus();
   }
 
-  return { map, renderers, carGroup, transitGroup, diagLayer, hlLayer, onPlaceClick, setTheme };
+  let anchorRequest = 0;
+  async function openAnchor(anchor) {
+    const request = ++anchorRequest;
+    const { lon, lat } = anchor;
+    try {
+      const data = await getJSON('/api/stops', {
+        bbox: [lon - 0.001, lat - 0.001, lon + 0.001, lat + 0.001].join(','),
+        kinds: 'bus,subway', virtual: 1,
+      });
+      if (request !== anchorRequest) return;
+      const bus = data.bus.find(s => s.id === anchor.id);
+      const subway = data.subway.find(s => s.id === anchor.id);
+      if (bus) place(bus, busStyle().fill, busInfo, bus.virtual ? {} : { busKey: bus.id })();
+      else if (subway) place(subway, safeColor(subway.color), subwayInfo, { line: subway.group || subway.line })();
+      else onPlaceClick({ latlng: L.latLng(lat, lon), name: anchor.name,
+        info: `<dl>${row('정류장 키', esc(anchor.id))}</dl>` });
+    } catch (err) { if (request === anchorRequest) onError(err); }
+  }
+
+  return { map, renderers, carGroup, transitGroup, diagLayer, hlLayer, onPlaceClick, openAnchor, setTheme };
 }
 
 // 배경지도 목록의 한 항목: 밝은·어두운 타일 레이어를 담는 무리. 테마에 맞는 쪽 하나만 무리에 넣는다

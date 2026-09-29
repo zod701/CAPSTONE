@@ -9,6 +9,7 @@ import { initStopRoutes, stopRoutesSection } from "./stoproutes.js";
 import { initTooltips } from "./tooltip.js";
 import { initLocation } from "./location.js";
 import { initPanelHandle } from "./panel.js";
+import { createHybridDebug } from "./hybrid-debug.js";
 
 const $ = (id) => document.getElementById(id);
 const CONSOLE_URL = "https://developers.kakao.com/console/app";
@@ -83,6 +84,16 @@ function setMsg(id, text, cls = "muted") {
 // --- 지도와 출발/도착 ---
 
 const view = createMap($("map"), { onError: (err) => showBanner(err), onPlaceClick: (p) => openOdMenu(p.latlng, p) });
+const hybridDebug = createHybridDebug($("hybrid-debug"), view.map, index => {
+  state.tab = "hybrid";
+  applyTab();
+  selectHybrid(index);
+}, view.openAnchor);
+$("developer-mode").addEventListener("change", event => {
+  hybridDebug.enable(event.target.checked);
+  hybridDebug.setTrace(state.hybrid?.trace);
+  update();
+});
 R.initRoutes(view);
 initStopRoutes(view);
 document.addEventListener('arrivals-quota', event => renderQuota(event.detail));
@@ -216,15 +227,23 @@ $("place-q").addEventListener("input", () => {
   syncPickButtons();
 });
 
+function hybridSearchComplete() {
+  const result = state.hybrid;
+  if (!result) return false;
+  if (result.routes.length === 0 && result.failed?.length > 0 && result.diag?.verified === 0) return false;
+  return !$("developer-mode").checked || !!result.trace;
+}
+
 function update() {
   const btn = $("btn-search");
   btn.disabled = state.busy || !(state.origin && state.dest);
   btn.textContent = state.busy ? "경로 검색 중…" : "경로 검색";
   const hy = $("btn-hybrid");
   // 한 번 찾으면 출발·도착이 바뀔 때까지 잠근다 — 같은 조건으로 다시 찾으면 쿼터만 쓴다(실패했으면 다시 시도할 수 있게 둔다)
-  hy.disabled = state.busy || state.hybridBusy || !!state.hybrid || !(state.origin && state.dest);
+  const complete = hybridSearchComplete();
+  hy.disabled = state.busy || state.hybridBusy || complete || !(state.origin && state.dest);
   hy.textContent = state.hybridBusy ? "앵커 확인 중…"
-    : state.hybrid ? `하이브리드\n탐색 완료 (${state.hybrid.routes.length}개)` : "하이브리드\n경로 탐색";
+    : complete ? `하이브리드\n탐색 완료 (${state.hybrid.routes.length}개)` : "하이브리드\n경로 탐색";
 }
 
 // keepHybrid — 같은 출발·도착으로 다시 검색할 때 찾은 하이브리드는 남긴다(버튼도 잠근 채)
@@ -237,6 +256,7 @@ function clearResults({ keepHybrid = false, pointChanged = false } = {}) {
   state.car = null;
   state.carOn = false;
   if (!keepHybrid) state.hybrid = null;
+  if (!keepHybrid) hybridDebug.clear();
   state.hybridIdx = null;
   state.tab = "all";
   R.clearTransit();
@@ -532,16 +552,19 @@ function revealSelectedCard() {
 
 // 버튼을 눌렀을 때만 부른다 — 서버가 앵커마다 카카오를 부르므로 쿼터를 크게 쓴다
 async function runHybrid() {
-  if (state.busy || state.hybridBusy || state.hybrid || !state.origin || !state.dest) return;
+  const debug = $("developer-mode").checked;
+  if (state.busy || state.hybridBusy || hybridSearchComplete() || !state.origin || !state.dest) return;
   panel.showResults();
   showResultsBar();
   const my = seq;
   state.hybridBusy = true;
+  hybridDebug.clear();
   update();
   setMsg("hybrid-body", "택시로 갈아탈 지점을 찾고 확인하는 중…");
   const o = state.origin;
   const d = state.dest;
   const params = { sx: o.lng.toFixed(6), sy: o.lat.toFixed(6), ex: d.lng.toFixed(6), ey: d.lat.toFixed(6) };
+  if (debug) params.debug = true;
   // [경로 검색] 결과를 받은 지 REUSE_MS 안이면 기준 경로로 돌려보내 다시 쓴다 — 서버는 이 요청을 처리하는 동안에만 쓴다
   // (대중교통 1콜 절약). 출발·도착이 바뀌면 결과가 지워지므로 여기 남은 것은 늘 같은 출발·도착의 결과다
   const reuse = state.transit?.routes?.length > 0 && Date.now() - state.transitAt < REUSE_MS;
@@ -551,6 +574,7 @@ async function runHybrid() {
       : await getJSON("/api/hybrid", params);
     if (my !== seq) return; // 그사이 출발·도착이 바뀌었다
     state.hybrid = data;
+    hybridDebug.setTrace(data.trace);
     if (data.quota) renderQuota(data.quota);
     drawHybrid();
     applyTab(); // 탭 옆 경로 수에 하이브리드를 더한다

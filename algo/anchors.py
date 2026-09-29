@@ -336,13 +336,15 @@ def _chain_km(lines, cid, i, j):
 
 # --- 후보 생성 ---
 
-def _near(stops, kind, pt, radii):
+def _near(stops, kind, pt, radii, *, radius_used=None):
     """기준점 반경 안의 정류소·역 → {id: (행, 거리 m)}. 비면 다음 반경으로 넓힌다.
 
     미정차(가상) 정류소는 `StopsDB.near` 가 기본으로 뺀다. 환승역은 운영 노선별로 행이 여럿이라
     같은 실체가 여러 id 로 들어온다 — 짝을 만들 때 phys_id 로 접는다.
     """
     for r in radii:
+        if radius_used is not None:
+            radius_used[kind] = r
         found = {}
         for i, dist in stops.near(kind, pt[0], pt[1], r):
             row = stops.row(kind, i)
@@ -483,8 +485,9 @@ def propose_backtrack(stops, routes, lines, o, d, *, vot, hybrid="A", at=None, h
     day = day_type(at) if at is not None else WEEKDAY
     reach = (taxi_reach_m(t_max_s),)
     r_o, r_d = (reach, walk_radius_m) if hybrid == "A" else (walk_radius_m, reach)
-    near_o = {k: _near(stops, k, o, r_o) for k in ("bus", "subway")}
-    near_d = {k: _near(stops, k, d, r_d) for k in ("bus", "subway")}
+    used_o, used_d = {}, {}
+    near_o = {k: _near(stops, k, o, r_o, radius_used=used_o) for k in ("bus", "subway")}
+    near_d = {k: _near(stops, k, d, r_d, radius_used=used_d) for k in ("bus", "subway")}
     far = o if hybrid == "A" else d            # 택시의 반대쪽 끝 (앵커가 아닌 쪽)
     sgg_far = (_sgg_at(near_o["bus"], near_o["subway"]) if hybrid == "A"
                else _sgg_at(near_d["bus"], near_d["subway"]))
@@ -542,12 +545,16 @@ def propose_backtrack(stops, routes, lines, o, d, *, vot, hybrid="A", at=None, h
     out.sort(key=lambda c: c["score_s"])
     info = dict(diag)   # Counter.update 는 값을 더한다 — 여기서는 덮어써야 한다
     info.update({"hybrid": hybrid, "anchors": len(out),
+                 "buffers": {k: [
+                     {"center": o, "radius_m": used_o[k], "mode": "taxi" if hybrid == "A" else "walk"},
+                     {"center": d, "radius_m": used_d[k], "mode": "walk" if hybrid == "A" else "taxi"},
+                 ] for k in ("bus", "subway")},
                  "near_o_bus": len(near_o["bus"]), "near_d_bus": len(near_d["bus"]),
                  "near_o_rail": len(near_o["subway"]), "near_d_rail": len(near_d["subway"])})
     return out, info
 
 
-def top_n(cands, n, max_per_route=2):
+def top_n(cands, n, max_per_route=2, trace=None):
     """점수 상위 n 개 — 같은 노선만 뽑히지 않게 노선마다 max_per_route 개까지 받는다.
 
     한 노선이 지나는 정류소가 여럿이면 상위가 그 노선 하나로 채워진다(동탄 → 경기도청 실측: 2–6위가
@@ -555,13 +562,18 @@ def top_n(cands, n, max_per_route=2):
     겹친다 — 쿼터를 쓰는 만큼 서로 다른 노선을 보는 편이 낫다.
     """
     seen, out = Counter(), []
-    for cand in cands:
+    for index, cand in enumerate(cands):
         rid = cand["ride_id"]
         if seen[rid] >= max_per_route:
+            if trace:
+                trace(cand, "노선별 제한", "같은 노선에서 이미 최대 %d개를 선택했습니다." % max_per_route)
             continue
         seen[rid] += 1
         out.append(cand)
         if len(out) >= n:
+            if trace:
+                for rest in cands[index + 1:]:
+                    trace(rest, "노선별 제한", "역추적 방향별 상위 %d개 예산을 채워 검토를 중단했습니다." % n)
             break
     return out
 
@@ -825,14 +837,21 @@ def _same_spot(a, b, near_m):
     return near
 
 
-def merge_candidates(*groups, top, near_m=NEAR_ANCHOR_M):
+def merge_candidates(*groups, top, near_m=NEAR_ANCHOR_M, trace=None):
     """여러 전략의 후보를 점수순으로 합쳐 검증할 상위 top 개 — 같은 검증 쿼리는 한 번만 남긴다(점수가 낮은 쪽)."""
     out = []
-    for cand in sorted((c for g in groups for c in g), key=lambda c: c["score_s"]):
-        if any(_same_spot(c, cand, near_m) for c in out):
+    ordered = sorted((c for g in groups for c in g), key=lambda c: c["score_s"])
+    for index, cand in enumerate(ordered):
+        winner = next((c for c in out if _same_spot(c, cand, near_m)), None)
+        if winner is not None:
+            if trace:
+                trace(cand, "병합·검증 예산", "같은 유형·연결 수단이며 앵커가 같거나 %dm 이내인 더 낮은 점수 후보로 병합했습니다." % near_m, winner)
             continue
         out.append(cand)
         if len(out) >= top:
+            if trace:
+                for rest in ordered[index + 1:]:
+                    trace(rest, "병합·검증 예산", "검증 예산 상위 %d개를 채워 추가 API 검증을 하지 않았습니다." % top)
             break
     return out
 

@@ -221,14 +221,14 @@ HybridTmax = Annotated[int, Query(ge=3, le=40)]
 
 @router.get("/hybrid")
 async def hybrid(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat,
-                 top: HybridTop = 5, t_max: HybridTmax = 30):
+                 top: HybridTop = 10, t_max: HybridTmax = 30, debug: bool = False):
     """택시 ↔ 대중교통 연계 경로. 앵커마다 카카오를 부르므로 화면의 버튼을 눌렀을 때만 돈다. 기준 경로도 새로 부른다."""
-    return await _hybrid(request, response, (sx, sy), (ex, ey), top, t_max, None)
+    return await _hybrid(request, response, (sx, sy), (ex, ey), top, t_max, None, debug)
 
 
 @router.post("/hybrid")
 async def hybrid_reuse(request: Request, response: Response, sx: Lon, sy: Lat, ex: Lon, ey: Lat,
-                       body: Annotated[dict, Body()], top: HybridTop = 5, t_max: HybridTmax = 30):
+                       body: Annotated[dict, Body()], top: HybridTop = 10, t_max: HybridTmax = 30, debug: bool = False):
     """같은 출발·도착의 [경로 검색] 결과(화면이 들고 있는 routes)를 본문으로 받아 기준 경로로 다시 쓴다 — 대중교통 1콜을 아낀다.
 
     카카오 응답을 서버에 두지 않는 규칙은 그대로다: 본문은 이 요청을 처리하는 동안에만 쓰고 버린다(web/README.md §6).
@@ -241,16 +241,16 @@ async def hybrid_reuse(request: Request, response: Response, sx: Lon, sy: Lat, e
         raise ApiError("invalid_request", "기준으로 쓸 대중교통 경로가 올바르지 않습니다.",
                        action="[경로 검색]을 다시 한 뒤 찾으세요.", status=400)
     try:
-        return await _hybrid(request, response, (sx, sy), (ex, ey), top, t_max, routes)
+        return await _hybrid(request, response, (sx, sy), (ex, ey), top, t_max, routes, debug)
     except (KeyError, TypeError, AttributeError, ValueError) as err:   # 모양은 맞는데 속 항목이 빠진 본문
         raise ApiError("invalid_request", "기준으로 쓸 대중교통 경로가 올바르지 않습니다.",
                        action="[경로 검색]을 다시 한 뒤 찾으세요.", status=400) from err
 
 
-async def _hybrid(request, response, o, d, top, t_max, base_routes):
+async def _hybrid(request, response, o, d, top, t_max, base_routes, debug=False):
     st = request.app.state
     out = await hybrid_plan.plan(st, transit_payload, o, d, base_routes=base_routes,
-                                 top=top, t_max_s=t_max * 60)
+                                 top=top, t_max_s=t_max * 60, **({"debug": True} if debug else {}))
     out["quota"] = st.quota.snapshot()
     response.headers["Cache-Control"] = "no-store"
     return out

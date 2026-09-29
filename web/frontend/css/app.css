@@ -840,7 +840,28 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 #search #btn-search { grid-column: 2; grid-row: 1; white-space: nowrap; }
 #search #btn-hybrid { grid-column: 2; grid-row: 1; max-width: 110px; margin: 0; white-space: pre-line; }
 #developer-tools { margin-top: 12px; }
-#developer-tools > section { padding-left: 28px; }
+.debug-toggle { display: flex; align-items: center; gap: 6px; padding: 10px 0; }
+#hybrid-debug { padding: 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 12px; }
+#hybrid-debug h3 { margin: 0 0 8px; }
+#hybrid-debug p { margin: 8px 0; line-height: 1.55; }
+.debug-stages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.debug-stages button, .debug-controls button, #hybrid-debug select, .debug-detail button { min-height: 36px; }
+.debug-stages button { white-space: normal; text-align: left; }
+.debug-stages small, .debug-table-wrap small { display: block; }
+.debug-stages [aria-pressed="true"] { outline: 2px solid var(--accent); }
+.debug-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.debug-count, .debug-detail { padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
+#hybrid-debug select { max-width: 100%; }
+.debug-table-wrap { overflow: auto; max-height: 310px; overscroll-behavior: contain; }
+.debug-table-wrap thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.debug-table-wrap tbody tr { height: 54px; }
+.debug-table-wrap td:first-child small { max-width: 130px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.debug-table-wrap table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.debug-table-wrap th, .debug-table-wrap td { padding: 6px; border-bottom: 1px solid var(--border); text-align: right; }
+.debug-table-wrap td:first-child { text-align: left; min-width: 85px; }
+.debug-selected { outline: 1px solid var(--accent); outline-offset: -1px; }
+.debug-warning { color: var(--accent); }
+#developer-tools > section:not(#hybrid-debug) { padding-left: 28px; }
 @media (max-width: 720px) {
   body.panel-dragging #sidebar {
     display: flex; position: relative; inset: auto;

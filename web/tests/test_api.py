@@ -487,6 +487,34 @@ def test_hybrid_plan(tmp_path, up):
     no_keys(r.text)
 
 
+@pytest.mark.parametrize("reuse", [False, True])
+def test_hybrid_developer_trace_is_opt_in_and_does_not_add_api_calls(tmp_path, up, reuse):
+    with serve(make_settings(tmp_path), up) as c:
+        routes = c.get("/api/transit", params=HYB_OD).json()["routes"] if reuse else None
+        params = {**HYB_OD, "top": 2}
+        def request(debug):
+            query = {**params, "debug": debug}
+            return (c.post("/api/hybrid", params=query, json={"routes": routes}) if reuse
+                    else c.get("/api/hybrid", params=query))
+        start = len(up.requests)
+        plain = request(False)
+        first_calls = len(up.requests) - start
+        start = len(up.requests)
+        traced = request(True)
+        assert traced.status_code == plain.status_code == 200
+        assert len(up.requests) - start == first_calls
+        original, debug = plain.json(), traced.json()
+    assert "trace" not in original
+    assert [{k: v for k, v in row.items() if k != "trace_id"} for row in debug["routes"]] == original["routes"]
+    trace = debug["trace"]
+    assert trace["total"] >= debug["diag"]["picked"]
+    assert trace["stages"][-1]["remaining"] == len(debug["routes"])
+    assert all(any(item["id"] == row["trace_id"] for item in trace["candidates"]) for row in debug["routes"])
+    assert trace["stages"][4]["removed"] == debug["diag"]["duplicate_walks"]
+    assert trace["stages"][5]["removed"] == debug["diag"]["too_little_saving"]
+    no_keys(traced.text)
+
+
 def test_hybrid_asks_for_both_taxi_directions(tmp_path, up, monkeypatch):
     """(b) 역추적을 first-mile(A)·last-mile(B) 두 방향으로 돌린다 — (a) 섭동이 내는 B 와는 다른 후보다."""
     from algo import anchors
@@ -572,6 +600,23 @@ def test_hybrid_reuses_the_search_result(tmp_path, up, monkeypatch):
 
 def test_hybrid_get_still_calls_the_base_route(client):
     assert client.get("/api/hybrid", params={**HYB_OD, "top": 1}).json()["diag"]["base_source"] == "called"
+
+
+@pytest.mark.parametrize("method", ["get", "post"])
+def test_hybrid_default_and_maximum_budget_are_ten(client, monkeypatch, method):
+    import app.api as api_mod
+    calls = []
+
+    async def plan(*args, **kwargs):
+        calls.append(kwargs["top"])
+        return {}
+
+    monkeypatch.setattr(api_mod.hybrid_plan, "plan", plan)
+    body = {"json": {"routes": [{"steps": []}]}} if method == "post" else {}
+    for params in (HYB_OD, {**HYB_OD, "top": 10}):
+        assert getattr(client, method)("/api/hybrid", params=params, **body).status_code == 200
+    assert getattr(client, method)("/api/hybrid", params={**HYB_OD, "top": 11}, **body).status_code == 400
+    assert calls == [10, 10]
 
 
 @pytest.mark.parametrize("payload", [{"routes": "x"}, {"routes": []}, {"routes": [{"steps": [{"type": "BUS"}]}]}, ["routes"]])

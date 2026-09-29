@@ -1,7 +1,7 @@
 """하이브리드(택시 ↔ 대중교통) 경로 — algo 의 앵커 후보를 온라인으로 확인해 화면에 줄 형태로 만든다.
 
 후보 생성(Tier 1)은 algo 가 정적 표만으로 한다(쿼터 0). 여기서는 상위 몇 개만 카카오로 확인한다(Tier 2) —
-앵커마다 자동차 1콜, A 유형은 대중교통 1콜이 더 든다. 기준 경로까지 더하면 top=5 에 대중교통 최대 6 · 자동차 5콜이라
+앵커마다 자동차 1콜, A 유형은 대중교통 1콜이 더 든다. 기준 경로까지 더하면 top=10 에 대중교통 최대 11 · 자동차 10콜이라
 화면의 버튼을 눌렀을 때만 돈다 → method.md §2.4, §3.
 
 **유형**: A = O →(택시) 앵커 →(대중교통) D · B = O →(대중교통) 앵커 →(택시) D ·
@@ -11,7 +11,7 @@ A 의 뒷구간은 앵커에서 다시 부른 대중교통 경로다. B 의 앞�
 노선이라 O → 앵커를 한 번 더 부른다. D 는 나머지 구간이 기준 경로에 그대로 있어 자동차 1콜뿐이다.
 C = 기준 경로가 돌아가기 시작하는 정류장에서 내려 경로를 다시 찾는다 — 택시로 목적지까지(자동차 1콜) 또는 그 정류장에서
 곧장 가는 노선의 앵커로(자동차 1 + 대중교통 1콜). C 는 예산을 따로 둬 정류장 2곳 × (1 + 앵커 3) 을 전부 확인한다.
-그래서 top=5 의 콜은 대중교통 1(기준) + 최대 5 + C 최대 6, 자동차 최대 5 + C 최대 8 이다.
+그래서 top=10 의 콜은 대중교통 1(기준) + 최대 10 + C 최대 6, 자동차 최대 10 + C 최대 8 이다.
 택시 시간에는 호출 대기가 들어가고(taxi_plan_s), 검증 뒤 기준선보다 5분 이상 빠르지 않은 후보는 뺀다(algo/cli 와 같다).
 
 **첫 승차 대기는 실시간 도착정보로** 바꾼 기준 경로를 기준선 · D · (a) 섭동의 B 에 쓴다 — 같은 값을 써야 견줄 수 있다.
@@ -35,13 +35,14 @@ from .errors import ApiError
 from .transit import normalize_car
 from .wait import apply_wait_defaults
 from .route_identity import duplicate_walk_route
+from .hybrid_trace import HybridTrace
 
 _ROOT = Path(__file__).resolve().parents[3]   # 저장소 루트 — algo 패키지를 찾는다
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 SGG_RADII = (2000.0, 10000.0)   # 좌표가 속한 시군을 가장 가까운 정류소로 본다 (택시 요금 유형·시계외)
-MAX_TOP = 8
+MAX_TOP = 10
 RIDE_TYPES = ("BUS", "SUBWAY")
 
 
@@ -305,7 +306,7 @@ async def _verify(st, transit_payload, o, d, cand, vot, anchors, compare, base_r
             "taxi": None if cand.get("link_mode") == "WALKING" else car, "transit": route}
 
 
-async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, top=5, t_max_s=1800, now=None):
+async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, top=10, t_max_s=1800, now=None, debug=False):
     """앵커 후보 생성 → 상위 top 개 온라인 확인 → 기준 경로와 함께 견준 결과.
 
     `base_routes` 를 주면 기준 경로를 새로 부르지 않고 그것(같은 출발·도착의 [경로 검색] 결과)을 쓴다.
@@ -336,6 +337,7 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
     if arrivals is not None and now is None:
         rt_routes, rt_diag = await realtime_first_waits(st, arrivals, o, base_routes)
     base, base_route = _fastest(rt_routes, o, d, compare)
+    trace = HybridTrace(o, d, vot, base) if debug else None
 
     # (b) 는 두 방향을 따로 낸다 — A 는 택시로 타러 가는 쪽, B 는 내려서 택시로 마무리하는 쪽(§3.2 대칭판)
     (b_a, diag_a), (b_b, diag_b) = await asyncio.gather(*(
@@ -351,13 +353,24 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
     a_cands = a_only + b_only
     d_cands, d_diag = anchors.propose_gap(o, d, rt_routes, vot=vot, at=at, t_max_s=t_max_s)
     # 병합은 algo 규칙을 그대로 쓴다 — D 는 택시 양끝이 모두 앵커라 도착점만 보면 서로 다른 공백을 하나로 합친다
-    picks = anchors.merge_candidates(anchors.top_n(b_a, top), anchors.top_n(b_b, top), a_cands, d_cands, top=top)
+    trace_kw = {"trace": trace.reject} if trace else {}
+    if trace:
+        trace.buffers = {"A": diag_a.get("buffers", {}), "B": diag_b.get("buffers", {})}
+        for candidates, source, diag in [(b_a, "직행 노선 역추적 A", diag_a), (b_b, "직행 노선 역추적 B", diag_b),
+                                          (a_only, "기존 경로 앞부분 교체 A", perturb_a), (b_only, "기존 경로 뒷부분 교체 B", perturb_b),
+                                          (d_cands, "중간 구간 교체 D", d_diag)]:
+            trace.add(candidates, source, diag)
+    picks = anchors.merge_candidates(anchors.top_n(b_a, top, **trace_kw), anchors.top_n(b_b, top, **trace_kw), a_cands, d_cands, top=top, **trace_kw)
     # C — 돌아가기 시작하는 정류장에서 다시 찾는다. 예산을 따로 둬 만든 만큼(정류장 수 × (택시로 목적지 1 + 앵커 수)) 전부 확인한다
     c_cands, c_diag = await asyncio.to_thread(
         anchors.propose_detour, st.stops, st.routes, st.lines, o, d, rt_routes, vot=vot, at=at,
         headway=st.headway, phys=st.anchor_tables.phys, hours=st.anchor_tables.hours, t_max_s=t_max_s)
     if c_cands:
-        picks += anchors.merge_candidates(c_cands, top=len(c_cands))
+        if trace:
+            trace.add(c_cands, "우회 구간 단축 C", c_diag)
+        picks += anchors.merge_candidates(c_cands, top=len(c_cands), **trace_kw)
+    elif trace:
+        trace.add([], "우회 구간 단축 C", c_diag)
 
     done = await asyncio.gather(*(_verify(st, transit_payload, o, d, c, vot, anchors, compare, base_routes, rt_routes, at)
                                  for c in picks), return_exceptions=True)
@@ -365,17 +378,34 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
     for cand, r in zip(picks, done):
         if isinstance(r, ApiError):
             failed.append({"anchor": cand["name"], "code": r.code, "message": r.message})
+            if trace:
+                trace.reject(cand, "경로 검증", "API 검증 실패: " + r.message)
         elif isinstance(r, BaseException):
             raise r
         elif r is not None:
+            if trace:
+                r["trace_id"] = trace.verified(cand, r)
             rows.append(r)
-    if not rows and failed:
+        elif trace:
+            trace.reject(cand, "경로 검증", "연결 가능한 대중교통 경로나 연결 구간을 얻지 못했습니다.")
+    if not rows and failed and not trace:
         raise ApiError(failed[0]["code"], failed[0]["message"],
                        action="잠시 뒤 다시 시도하거나 확인할 앵커 수를 줄이세요.", status=503)
 
     verified = len(rows)
+    if trace:
+        by_trace_id = {trace.records[id(c)]["id"]: c for c in picks}
+        for row in rows:
+            if duplicate_walk_route(row, base_routes, o, d):
+                trace.reject(by_trace_id[row["trace_id"]], "중복 제외", "기존 대중교통과 이동 경로가 같은 도보 대체입니다.")
     rows = [r for r in rows if not duplicate_walk_route(r, base_routes, o, d)]
     duplicate_walks = verified - len(rows)
+    if trace:
+        for row in rows:
+            if not compare.saves_enough(row["time_s"], base["time_s"], walking=row.get("link_mode") == "WALKING"):
+                trace.reject(by_trace_id[row["trace_id"]], "시간 절약 검사",
+                             "기준 대비 %.1f분 절약. %s" % ((base["time_s"] - row["time_s"]) / 60,
+                             "도보 대체는 기준보다 빨라야 합니다." if row.get("link_mode") == "WALKING" else "택시 경로는 최소 5분을 절약해야 합니다."))
     # 택시를 쓰는 최소 기준 — 같은 잣대의 기준선(최소 시간 경로)보다 5분 이상 빠르지 않은 후보는 보여 주지 않는다 (algo/cli 와 같다)
     rows = [r for r in rows if compare.saves_enough(r["time_s"], base["time_s"], walking=r.get("link_mode") == "WALKING")]
 
@@ -389,7 +419,8 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
         r["pareto"] = id(r) in front
     baseline["pareto"] = id(baseline) in front
     rows.sort(key=lambda r: r["gc_s"])
-    return {"pref": pref, "vot": vot, "at": at.isoformat(timespec="minutes"), "t_max_s": t_max_s,
+    return {**({"trace": trace.finish(rows)} if trace else {}),
+            "pref": pref, "vot": vot, "at": at.isoformat(timespec="minutes"), "t_max_s": t_max_s,
             "baseline": baseline, "routes": rows, "failed": failed,
             "diag": {"backtrack_a": diag_a, "backtrack_b": diag_b, "perturb_a": perturb_a, "perturb_b": perturb_b,
                      "gap": d_diag, "detour": c_diag,
