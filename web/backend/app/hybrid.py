@@ -34,7 +34,6 @@ from .config import KST
 from .errors import ApiError
 from .transit import normalize_car
 from .wait import apply_wait_defaults
-from .route_identity import duplicate_walk_route
 from .hybrid_trace import HybridTrace
 
 _ROOT = Path(__file__).resolve().parents[3]   # 저장소 루트 — algo 패키지를 찾는다
@@ -395,19 +394,14 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
     verified = len(rows)
     if trace:
         by_trace_id = {trace.records[id(c)]["id"]: c for c in picks}
-        for row in rows:
-            if duplicate_walk_route(row, base_routes, o, d):
-                trace.reject(by_trace_id[row["trace_id"]], "중복 제외", "기존 대중교통과 이동 경로가 같은 도보 대체입니다.")
-    rows = [r for r in rows if not duplicate_walk_route(r, base_routes, o, d)]
-    duplicate_walks = verified - len(rows)
     if trace:
         for row in rows:
-            if not compare.saves_enough(row["time_s"], base["time_s"], walking=row.get("link_mode") == "WALKING"):
+            if not compare.saves_enough(row["time_s"], base["time_s"]):
                 trace.reject(by_trace_id[row["trace_id"]], "시간 절약 검사",
                              "기준 대비 %.1f분 절약. %s" % ((base["time_s"] - row["time_s"]) / 60,
-                             "도보 대체는 기준보다 빨라야 합니다." if row.get("link_mode") == "WALKING" else "택시 경로는 최소 5분을 절약해야 합니다."))
+                             "택시 경로는 최소 5분을 절약해야 합니다."))
     # 택시를 쓰는 최소 기준 — 같은 잣대의 기준선(최소 시간 경로)보다 5분 이상 빠르지 않은 후보는 보여 주지 않는다 (algo/cli 와 같다)
-    rows = [r for r in rows if compare.saves_enough(r["time_s"], base["time_s"], walking=r.get("link_mode") == "WALKING")]
+    rows = [r for r in rows if compare.saves_enough(r["time_s"], base["time_s"])]
 
     baseline = {**base, "label": "최소 시간 경로", "route": base_route}
     for r in rows + [baseline]:
@@ -424,8 +418,7 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
             "baseline": baseline, "routes": rows, "failed": failed,
             "diag": {"backtrack_a": diag_a, "backtrack_b": diag_b, "perturb_a": perturb_a, "perturb_b": perturb_b,
                      "gap": d_diag, "detour": c_diag,
-                     "too_little_saving": verified - duplicate_walks - len(rows), "min_saving_s": anchors.TAXI_MIN_SAVING_S,
-                     "duplicate_walks": duplicate_walks,
+                     "too_little_saving": verified - len(rows), "min_saving_s": anchors.TAXI_MIN_SAVING_S,
                      "realtime": rt_diag,   # 첫 승차 대기 — realtime · realtime+headway · no_arrivals … (안 썼으면 None)
                      "base_source": base_source,   # called = 기준 경로를 새로 부름 · reused = [경로 검색] 결과를 다시 씀
                      "picked": len(picks), "verified": verified}}

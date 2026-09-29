@@ -76,15 +76,15 @@ def test_map_limit_keeps_verified_results_and_total_counts():
     assert payload["stages"][0]["entered"] == 520
 
 
-def test_duplicate_and_time_filters_record_distinct_stages():
+def test_verification_and_time_filters_record_distinct_stages():
     a, b = candidate("a", 100), candidate("b", 110)
     trace = HybridTrace((127, 37), (128, 38), 500, {})
     trace.add([a, b], "test", {})
-    trace.reject(a, "중복 제외", "같은 경로")
+    trace.reject(a, "경로 검증", "조회 실패")
     trace.reject(b, "시간 절약 검사", "절약 부족")
     result = trace.finish([])
     assert result["stages"][4]["removed"] == 1
-    assert result["stages"][5]["removed"] == 1
+    assert result["stages"][3]["removed"] == 1
     assert result["stages"][-1]["remaining"] == 0
 
 

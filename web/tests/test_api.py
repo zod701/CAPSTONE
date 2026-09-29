@@ -468,7 +468,7 @@ def test_hybrid_plan(tmp_path, up):
     body = r.json()
     # 선호는 시간 중시로 고정, 기준선은 같은 잣대로 잰 최소 시간 대중교통 경로
     from algo import anchors
-    assert body["pref"] == "time" and body["vot"] == anchors.VOT["time"]
+    assert body["pref"] == "time" and body["vot"] == anchors.VOT["time"] == 456.0
     assert "comparisons" not in body
     base = body["baseline"]
     assert base["label"] == "최소 시간 경로" and base["time_s"] > 0 and base["route"]["steps"]
@@ -510,8 +510,8 @@ def test_hybrid_developer_trace_is_opt_in_and_does_not_add_api_calls(tmp_path, u
     assert trace["total"] >= debug["diag"]["picked"]
     assert trace["stages"][-1]["remaining"] == len(debug["routes"])
     assert all(any(item["id"] == row["trace_id"] for item in trace["candidates"]) for row in debug["routes"])
-    assert trace["stages"][4]["removed"] == debug["diag"]["duplicate_walks"]
-    assert trace["stages"][5]["removed"] == debug["diag"]["too_little_saving"]
+    assert trace["stages"][4]["removed"] == debug["diag"]["too_little_saving"]
+    assert all(c["mode"] != "WALKING" for c in trace["candidates"])
     no_keys(traced.text)
 
 
@@ -810,7 +810,7 @@ def test_search_local_quota_blocks_only_that_kind(tmp_path, up):
 
 # --- /api/arrivals/stop (버스 정류장 실시간 도착) ---
 
-BUS_ITEM_KEYS = {"source", "route_id", "route_name", "route_type", "eta_s", "n_stops_ahead", "crowding",
+BUS_ITEM_KEYS = {"source", "route_id", "route_name", "route_type", "eta_s", "n_stops_ahead", "crowding", "headway_m",
                  "seats", "is_last", "vehicle", "message", "dest"}
 RAIL_ITEM_KEYS = {"direction", "eta_s", "age_s", "n_stops_ahead", "message", "train_type", "dest",
                   "headsign", "train_no"}
@@ -830,11 +830,11 @@ def test_arrivals_stop_merges_both_bis(client, up):
     assert [(i["source"], i["route_name"], i["eta_s"]) for i in body["items"]] == [
         ("seoul", "9", 115), ("gyeonggi", "380", 180), ("seoul", "9", 332), ("gyeonggi", "380", 660),
         ("gyeonggi", "10", None), ("seoul", "99", None)]
-    assert body["items"][1] == {"source": "gyeonggi", "route_id": "204000901", "route_name": "380",
+    assert {k: v for k, v in body["items"][1].items() if k != "headway_m"} == {"source": "gyeonggi", "route_id": "204000901", "route_name": "380",
                                 "route_type": "일반", "eta_s": 180, "n_stops_ahead": 2, "crowding": 2,
                                 "seats": 12, "is_last": None, "vehicle": "경기70아1234", "message": None,
                                 "dest": "야탑역"}
-    assert body["items"][2] == {"source": "seoul", "route_id": "100000901", "route_name": "9",
+    assert {k: v for k, v in body["items"][2].items() if k != "headway_m"} == {"source": "seoul", "route_id": "100000901", "route_name": "9",
                                 "route_type": None, "eta_s": 332, "n_stops_ahead": 2, "crowding": None,
                                 "seats": None, "is_last": True, "vehicle": None,
                                 "message": "5분32초후[2번째 전]", "dest": None}
@@ -1057,3 +1057,40 @@ def test_static_mime(client, path, ctype):
     assert r.status_code == 200
     assert r.headers["content-type"].startswith(ctype)
     assert r.headers["cache-control"] == "no-cache"   # 고친 JS 가 F5 에서 바로 뜨게
+
+@pytest.mark.parametrize('seoul_eta, gg_eta, expected', [
+    (120, 60, 'seoul'),       # 경기 예측이 빨라도 서울 우선
+    (0, 60, 'seoul'),         # 곧 도착도 유효
+    (None, 60, 'gyeonggi'),   # 서울 출발대기/예측 없음
+    (None, None, 'seoul'),    # 둘 다 없으면 서울 상태만 유지
+])
+def test_bus_source_preference_applies_to_stop_api(client, monkeypatch, seoul_eta, gg_eta, expected):
+    from app.realtime import RealtimeClient
+
+    def item(source, eta, vehicle):
+        return dict(source=source, route_id='204000901', route_name='380', route_type=None,
+                    eta_s=eta, n_stops_ahead=None, vehicle=vehicle, message='출발대기' if eta is None else None)
+
+    async def seoul(self, stop):
+        return [item('seoul', seoul_eta, 'same-vehicle')]
+
+    async def gyeonggi(self, stop):
+        return [item('gyeonggi', gg_eta, 'same-vehicle'),
+                item('gyeonggi', None if gg_eta is None else 300, 'next-vehicle')]
+
+    monkeypatch.setattr(RealtimeClient, 'seoul_stop', seoul)
+    monkeypatch.setattr(RealtimeClient, 'gyeonggi_stop', gyeonggi)
+    body = client.get('/api/arrivals/stop/204000101').json()
+    assert {i['source'] for i in body['items']} == {expected}
+    assert len(body['items']) == (2 if expected == 'gyeonggi' else 1)
+
+
+def test_bus_source_preference_uses_route_id_not_name():
+    from app.api import _prefer_seoul_bus
+    def item(source, route_id, eta):
+        return dict(source=source, route_id=route_id, route_name='700', eta_s=eta, message=None)
+    seoul = item('seoul', '1', 120)
+    duplicate = item('gyeonggi', '1', 60)
+    other = item('gyeonggi', '2', 30)
+    unknown = item('gyeonggi', None, 40)
+    assert _prefer_seoul_bus([duplicate, other, seoul, unknown]) == [seoul, other, unknown]

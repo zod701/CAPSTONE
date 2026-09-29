@@ -129,10 +129,9 @@ def test_walk_verification_cli_matches_web(hybrid, strategy):
     assert (cli["time_s"], cli["fare"]) == pytest.approx((web["time_s"], web["fare"]))
 
 
-def test_plan_keeps_walk_candidate_without_five_minute_saving(monkeypatch):
+def test_plan_excludes_candidate_without_five_minute_saving(monkeypatch):
     import app.hybrid as hybrid
     candidate = cand("A", "b", score_s=100, ride_id="r1")
-    candidate.update(anchors.walking_connection(100))
     monkeypatch.setattr(anchors, "propose_backtrack", lambda *args, **kw:
                         ([candidate] if kw["hybrid"] == "A" else [], {}))
     for name in ("propose_perturb", "propose_gap", "propose_detour"):
@@ -144,9 +143,8 @@ def test_plan_keeps_walk_candidate_without_five_minute_saving(monkeypatch):
                          kakao=SimpleNamespace(car=calls.car_call))
     result = asyncio.run(hybrid.plan(st, calls.transit_call, O, D,
                                     base_routes=[transit_route(board=O, alight=D, time_s=1200, wait_s=0)]))
-    row, = result["routes"]
-    assert 0 < result["baseline"]["time_s"] - row["time_s"] < anchors.TAXI_MIN_SAVING_S
-    assert row["link_mode"] == "WALKING" and calls.car == []
+    assert result["routes"] == []
+    assert result["diag"]["too_little_saving"] == 1
 
 
 @pytest.mark.parametrize("strategy", ["a", "b"])

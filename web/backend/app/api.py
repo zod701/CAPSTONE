@@ -366,14 +366,35 @@ async def arrivals_stop_payload(st, stop_key):
                 it["route_type"] = types.get(it["route_id"])   # 순서표의 카카오 유형 이름 (프론트 BUS_COLOR 키)
             it["headway_m"] = _route_headway(headway_db, it["route_id"], day) if headway_db and it["route_id"] else None
             items.append(it)
+    items = _prefer_seoul_bus(items)
     items.sort(key=_eta_order)
     return {"stop": stop_key, "name": row["name"], "items": items, "failed": failed}
+
+
+def _prefer_seoul_bus(items):
+    """동일 정류장·노선은 서울 우선. 예측이 없을 때만 경기의 유효한 정보를 쓴다."""
+    routes = {}
+    for index, item in enumerate(items):
+        # 번호가 같은 다른 노선을 합치지 않는다. ID가 없는 항목도 서로 합치지 않는다.
+        key = item["route_id"] or ("unknown", index)
+        routes.setdefault(key, {}).setdefault(item["source"], []).append(item)
+
+    def usable(rows):
+        return any((it["eta_s"] is not None and it["eta_s"] >= 0)
+                   or "곧 도착" in (it["message"] or "") for it in rows)
+
+    selected = []
+    for sources in routes.values():
+        seoul, gyeonggi = sources.get("seoul", []), sources.get("gyeonggi", [])
+        # 첫 차·다음 차를 한 원천에서 선택해 동일 차량의 중복·순서 혼합을 막는다.
+        selected.extend(seoul if usable(seoul) else gyeonggi if usable(gyeonggi) else seoul or gyeonggi)
+    return selected
 
 
 @router.get("/arrivals/stop/{stop_key}")
 async def arrivals_stop(request: Request, stop_key: str):
     """버스 정류장 실시간 도착. 그 정류장을 등록한 BIS 전부를 동시에 부르고 합친다
-    (한쪽만 실패하면 다른 쪽 결과 + failed — /api/search 와 같다)."""
+    (노선별 서울 우선, 서울 예측이 없으면 경기로 보완. 실패는 failed 에 기록)."""
     st = request.app.state
     out = await arrivals_stop_payload(st, stop_key)
     out["quota"] = st.quota.snapshot()
