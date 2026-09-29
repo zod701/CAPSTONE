@@ -34,6 +34,7 @@ from .config import KST
 from .errors import ApiError
 from .transit import normalize_car
 from .wait import apply_wait_defaults
+from .route_identity import duplicate_walk_route
 
 _ROOT = Path(__file__).resolve().parents[3]   # 저장소 루트 — algo 패키지를 찾는다
 if str(_ROOT) not in sys.path:
@@ -373,6 +374,8 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
                        action="잠시 뒤 다시 시도하거나 확인할 앵커 수를 줄이세요.", status=503)
 
     verified = len(rows)
+    rows = [r for r in rows if not duplicate_walk_route(r, base_routes, o, d)]
+    duplicate_walks = verified - len(rows)
     # 택시를 쓰는 최소 기준 — 같은 잣대의 기준선(최소 시간 경로)보다 5분 이상 빠르지 않은 후보는 보여 주지 않는다 (algo/cli 와 같다)
     rows = [r for r in rows if compare.saves_enough(r["time_s"], base["time_s"], walking=r.get("link_mode") == "WALKING")]
 
@@ -390,7 +393,8 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
             "baseline": baseline, "routes": rows, "failed": failed,
             "diag": {"backtrack_a": diag_a, "backtrack_b": diag_b, "perturb_a": perturb_a, "perturb_b": perturb_b,
                      "gap": d_diag, "detour": c_diag,
-                     "too_little_saving": verified - len(rows), "min_saving_s": anchors.TAXI_MIN_SAVING_S,
+                     "too_little_saving": verified - duplicate_walks - len(rows), "min_saving_s": anchors.TAXI_MIN_SAVING_S,
+                     "duplicate_walks": duplicate_walks,
                      "realtime": rt_diag,   # 첫 승차 대기 — realtime · realtime+headway · no_arrivals … (안 썼으면 None)
                      "base_source": base_source,   # called = 기준 경로를 새로 부름 · reused = [경로 검색] 결과를 다시 씀
                      "picked": len(picks), "verified": verified}}
