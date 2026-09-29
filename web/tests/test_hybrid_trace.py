@@ -1,7 +1,7 @@
 from copy import deepcopy
 
 from algo.anchors import merge_candidates, top_n, _near
-from app.hybrid_trace import HybridTrace, STAGES
+from app.hybrid_trace import HybridTrace, STAGES, _itinerary, _geometry
 
 
 def candidate(name, score, route="r", lon=127.1):
@@ -99,3 +99,54 @@ def test_anchor_markers_identify_stops_not_origin_or_destination():
     assert trace.records[id(b)]["anchors"][0]["lon"] == a["lon"]
     assert [p["id"] for p in trace.records[id(d)]["anchors"]] == ["x", "y"]
     assert [p["id"] for p in trace.records[id(c)]["anchors"]] == ["x"]
+
+
+def test_backtrack_itinerary_names_bus_and_keeps_verified_route_separate():
+    c = candidate("순천향대학병원", 100)
+    c["fare_step"] = {"type": "BUS", "board_name": c["name"], "alight_name": "신사역",
+                      "fare_routes": [{"name": "400"}]}
+    trace = HybridTrace((127, 37), (128, 38), 500, {})
+    trace.add([c], "test", {})
+    record = trace.records[id(c)]
+    assert record["itinerary"] == ["출발지", "출발지에서 순천향대학병원까지 택시",
+        "순천향대학병원에서 400 버스 탑승", "신사역 하차", "도보", "목적지 도착"]
+    trace.verified(c, {"time_s": 100, "fare": 2000, "transit": {"steps": [
+        {"type": "BUS", "board_name": c["name"], "alight_name": "논현역", "vehicles": [{"name": "140"}]}]}})
+    assert "신사역 하차" in record["itinerary"]
+    assert "논현역 하차" in record["verified"]["itinerary"]
+
+
+def test_walking_replacement_and_middle_connection_have_correct_order():
+    c = dict(candidate("A→B", 100), hybrid="D", link_mode="WALKING")
+    ride = {"type": "SUBWAY", "board_name": "출발역", "alight_name": "A", "line_group": "2호선"}
+    tail = {"type": "BUS", "board_name": "B", "alight_name": "종점", "vehicles": [{"name": "100"}, {"name": "200"}]}
+    parts = _itinerary(c, [ride, {"type": "TAXI"}, tail])
+    assert parts.index("A 하차") < parts.index("A에서 B까지 도보") < parts.index("B에서 100 / 200 버스 탑승")
+    b = dict(c, hybrid="B", name="A", link_mode="TAXI")
+    assert _itinerary(b, [ride, {"type": "TAXI"}])[-2:] == ["A에서 목적지까지 택시", "목적지 도착"]
+
+
+def test_geometry_connects_transit_stops_and_taxi_without_route_queries():
+    origin, destination = [127, 37], [128, 38]
+    board, alight = [127.1, 37.1], [127.5, 37.5]
+    ride = {"type": "BUS", "stop_locs": [{"lon": p[0], "lat": p[1]} for p in [board, alight]]}
+    segments = _geometry([{"type": "TAXI"}, ride], [origin, board], origin, destination, "TAXI")
+    assert segments == [{"type": "TAXI", "path": [origin, board]},
+                        {"type": "BUS", "path": [board, alight], "vehicles": []},
+                        {"type": "WALKING", "path": [alight, destination]}]
+    segments = _geometry([ride, {"type": "TAXI"}], [alight, destination], origin, destination, "WALKING")
+    assert segments[0]["path"] == [origin, board]
+    assert segments[-1] == {"type": "WALKING", "path": [alight, destination]}
+
+
+def test_geometry_preserves_bus_types_and_uses_local_subway_color():
+    path = [[127, 37], [128, 38]]
+    bus = {"type": "BUS", "path": path, "fare_routes": [{"name": "140", "type": "간선"}]}
+    rail = {"type": "SUBWAY", "path": path, "line_group": "수인분당선"}
+    def color(group):
+        assert group == "수인분당선"
+        return "#FABE00"
+    assert _geometry([bus], path, *path, "TAXI")[0]["vehicles"] == [{"name": "140", "type": "간선"}]
+    assert _geometry([rail], path, *path, "TAXI", color)[0]["color"] == "#FABE00"
+    rail["color"] = "#123456"
+    assert _geometry([rail], path, *path, "TAXI", color)[0]["color"] == "#123456"

@@ -460,6 +460,8 @@ def _ride(brief_id, name, rtype, p, p_row, q, q_row, n_stops, km, walk_m, kind="
     step = {"type": "SUBWAY" if kind == "subway" else "BUS", "distance_m": km * 1000,
             "time_s": ride_s(km, rtype, kind=kind), "wait_s": 0, "line_group": p_row.get("line_group"),
             "board_name": p_row["name"], "alight_name": q_row["name"],
+            "stop_locs": [{"lon": p_row["lon"], "lat": p_row["lat"]},
+                          {"lon": q_row["lon"], "lat": q_row["lat"]}],
             "fare_routes": [{"id": brief_id, "name": name, "type": rtype, "source": source}]}
     fare = estimate_fare([step], transit_fare(rtype, kind=kind))
     return {"id": brief_id, "name": name, "type": rtype,

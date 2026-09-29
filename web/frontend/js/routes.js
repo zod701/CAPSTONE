@@ -203,7 +203,7 @@ function majorBusColor(s) {
   return best;
 }
 
-function stepStyle(s) {
+export function stepStyle(s) {
   if (s.type === "BUS") return { color: majorBusColor(s), weight: 8 };
   if (s.type === "SUBWAY") return { color: safeColor(s.color, COLOR.SUBWAY), weight: 8 };
   if (s.type === "WALKING") return { color: COLOR.WALKING, weight: 5, dashArray: "1 9", lineCap: "round", className: "route-walk" };

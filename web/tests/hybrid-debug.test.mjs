@@ -4,6 +4,18 @@ import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import { stageState, comparisonCandidates, createHybridDebug } from '../frontend/js/hybrid-debug.js';
 
+test('shared route style distinguishes trunk buses and Bundang rail', () => {
+  const source = readFileSync(new URL('../frontend/js/routes.js', import.meta.url), 'utf8');
+  const constants = source.slice(source.indexOf('const COLOR ='), source.indexOf('const TYPE_LABEL ='));
+  const functions = ['vehicles', 'majorBusColor', 'stepStyle'].map(name =>
+    source.match(new RegExp(`(?:export )?function ${name}\\([^]*?\\n\\}`))[0]).join('\n');
+  const context = vm.createContext({ safeColor: (c, fallback) => c || fallback });
+  vm.runInContext((constants + functions).replaceAll('export ', ''), context);
+  assert.equal(context.stepStyle({ type: 'BUS', vehicles: [{ name: '140', type: '간선' }] }).color, '#3D5BAB');
+  assert.equal(context.stepStyle({ type: 'BUS', vehicles: [{ name: '4212', type: '지선' }] }).color, '#5BB025');
+  assert.equal(context.stepStyle({ type: 'SUBWAY', color: '#FABE00' }).color, '#FABE00');
+});
+
 test('failed developer verification can retry without discarding trace or unlocking successful searches', async () => {
   const source = readFileSync(new URL('../frontend/js/app.js', import.meta.url), 'utf8');
   const elements = { 'developer-mode': { checked: true }, 'btn-search': {}, 'btn-hybrid': {} };
@@ -59,10 +71,11 @@ test('anchor markers open stop information without bubbling into address lookup'
     const next = { dataset: { nav: '1' }, addEventListener(_, fn) { this.click = fn; } };
     const el = { querySelectorAll: s => s === '[data-nav]' ? [next] : [],
       querySelector: s => controls[s] ||= { addEventListener(_, fn) { this.change = fn; } } };
-    const map = { createPane: () => ({ style: {} }) };
+    const map = { createPane: () => ({ style: {} }), fitBounds() {} };
     const anchor = { id: 'bus-stop', name: '정류장', lat: 37.1, lon: 127.1 };
-    let opened;
-    const view = createHybridDebug(el, map, () => {}, value => { opened = value; });
+    let opened, cleared = 0;
+    const view = createHybridDebug(el, map, () => {}, value => { opened = value; }, () => { cleared++; },
+      () => ({ color: '#3D5BAB' }));
     view.enable(true);
     view.setTrace({ vot: 500, baseline: {}, generation: {}, origin: [127, 37], destination: [128, 38],
       buffers: { A: { bus: [{ center: [127, 37], radius_m: 8790, mode: 'taxi' },
@@ -71,7 +84,11 @@ test('anchor markers open stop information without bubbling into address lookup'
           { center: [128, 38], radius_m: 8790, mode: 'taxi' }] } },
       stages: [{ name: '후보 생성', entered: 1, removed: 0, remaining: 1 }, { name: '다음', remaining: 1 }],
       candidates: [{ id: 'c1', name: '정류장', stage: 1, type: 'B',
-        connector: [[127.1, 37.1], [128, 38]], anchors: [anchor] }] });
+        connector: [[127.1, 37.1], [128, 38]], anchors: [anchor], geometry: [
+          { type: 'WALKING', path: [[127, 37], [127.05, 37.05]] },
+          { type: 'BUS', path: [[127.05, 37.05], [127.1, 37.1]] },
+          { type: 'TAXI', path: [[127.1, 37.1], [128, 38]] },
+        ] }] });
     const marker = shapes.find(s => s.options.radius === 6);
     assert.deepEqual(marker.points, [37.1, 127.1]);
     assert.equal(marker.options.bubblingMouseEvents, false);
@@ -79,6 +96,11 @@ test('anchor markers open stop information without bubbling into address lookup'
     assert.deepEqual(shapes.filter(s => s.options.radius > 10).map(s => s.options.radius), [8790, 400]);
     marker.handlers.click();
     assert.equal(opened, anchor);
+    assert.equal(cleared, 1);
+    assert.equal(shapes.filter(s => s.options.weight === 5)[1].options.color, '#3D5BAB');
+    assert.deepEqual(shapes.filter(s => s.options.weight === 5).map(s => s.points), [
+      [[37, 127], [37.05, 127.05]], [[37.05, 127.05], [37.1, 127.1]], [[37.1, 127.1], [38, 128]],
+    ]);
     controls['[data-direction]'].change({ target: { value: 'B' } });
     assert.deepEqual(shapes.filter(s => s.options.radius > 10).map(s => s.options.radius), [800, 8790]);
     next.click();

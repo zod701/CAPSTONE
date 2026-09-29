@@ -88,7 +88,15 @@ const hybridDebug = createHybridDebug($("hybrid-debug"), view.map, index => {
   state.tab = "hybrid";
   applyTab();
   selectHybrid(index);
-}, view.openAnchor);
+}, view.openAnchor, () => {
+  state.selectedIdx = null;
+  state.hybridIdx = null;
+  state.carOn = false;
+  R.markSelectedKey(null);
+  R.markCarSelected($("car-body"), false);
+  R.clearTransit();
+  R.clearCar();
+}, R.stepStyle);
 $("developer-mode").addEventListener("change", event => {
   hybridDebug.enable(event.target.checked);
   hybridDebug.setTrace(state.hybrid?.trace);
@@ -528,6 +536,7 @@ function selectRoute(i) {
   const t = state.transit;
   const route = t?.routes?.[i];
   if (!route) return;
+  hybridDebug.hideMap();
   state.selectedIdx = i;
   state.carOn = false;
   R.markCarSelected($("car-body"), false);
@@ -593,6 +602,7 @@ async function runHybrid() {
 function selectHybrid(i) {
   const r = state.hybrid?.routes?.[i];
   if (!r) return;
+  hybridDebug.hideMap();
   state.hybridIdx = i;
   state.selectedIdx = null;
   state.carOn = false;
@@ -645,6 +655,7 @@ function updateCarCard() {
 
 // 택시도 다른 경로와 하나만 선택한다. 다시 누르면 선택을 해제한다.
 function toggleCar() {
+  hybridDebug.hideMap();
   dropHybrid();
   state.selectedIdx = null;
   R.markSelectedKey(null);

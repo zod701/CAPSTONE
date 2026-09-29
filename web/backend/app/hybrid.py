@@ -337,7 +337,7 @@ async def plan(st, transit_payload, o, d, *, arrivals=None, base_routes=None, to
     if arrivals is not None and now is None:
         rt_routes, rt_diag = await realtime_first_waits(st, arrivals, o, base_routes)
     base, base_route = _fastest(rt_routes, o, d, compare)
-    trace = HybridTrace(o, d, vot, base) if debug else None
+    trace = HybridTrace(o, d, vot, base, group_color=st.stops.group_color) if debug else None
 
     # (b) 는 두 방향을 따로 낸다 — A 는 택시로 타러 가는 쪽, B 는 내려서 택시로 마무리하는 쪽(§3.2 대칭판)
     (b_a, diag_a), (b_b, diag_b) = await asyncio.gather(*(

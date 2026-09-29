@@ -30,7 +30,7 @@ export function comparisonCandidates(candidates, step, last) {
     .sort((a, b) => score(a) - score(b));
 }
 
-export function createHybridDebug(el, map, onSelectResult, onAnchorClick) {
+export function createHybridDebug(el, map, onSelectResult, onAnchorClick, onSelectCandidate, transitStyle) {
   let trace = null, enabled = false, step = 0, selected = null, showMap = true;
   let direction = 'A', bufferKind = 'bus';
   const layer = L.layerGroup();
@@ -38,6 +38,14 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick) {
   const pane = map.createPane('hybridDebugPane');
   pane.style.zIndex = '470';
   const renderer = L.svg({ pane: 'hybridDebugPane' });
+
+  function selectCandidate(id) {
+    selected = id || null;
+    showMap = true;
+    onSelectCandidate?.();
+    render();
+    paintMap(true);
+  }
 
   function paintMap(fit = false) {
     layer.clearLayers();
@@ -52,19 +60,33 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick) {
           weight: 2, fillOpacity: 0.06, dashArray: '6 5', interactive: false,
         }).addTo(layer);
         const box = circle.getBounds();
-        bounds.push(box.getSouthWest(), box.getNorthEast());
+        if (!selected) bounds.push(box.getSouthWest(), box.getNorthEast());
       }
     }
     for (const [index, c] of trace.candidates.entries()) {
+      if (selected && c.id !== selected) continue;
       if (index >= (trace.map_limit ?? Infinity) && c.id !== selected) continue;
       const status = stageState(c, step, last);
       if (status === 'past' && c.id !== selected) continue;
       const points = c.connector.map(([lon, lat]) => [lat, lon]);
       bounds.push(...points);
-      const choose = () => { selected = c.id; render(); };
-      L.polyline(points, { renderer, bubblingMouseEvents: false, color: colors[status], weight: c.id === selected ? 7 : 3,
-        opacity: c.id === selected ? 1 : 0.5, dashArray: c.mode === 'WALKING' ? '3 5' : '8 5' })
-        .bindTooltip(`${esc(c.id)} · ${esc(c.name)}`).on('click', choose).addTo(layer);
+      const choose = () => selectCandidate(c.id);
+      const geometry = selected ? (step >= 3 && c.verified?.geometry || c.geometry) : null;
+      if (geometry?.length) {
+        const routeColors = { TAXI: '#e5a000', WALKING: '#888', BUS: '#16884a', SUBWAY: '#2474db', TRANSIT: '#2474db' };
+        for (const segment of geometry) {
+          const path = segment.path.map(([lon, lat]) => [lat, lon]);
+          bounds.push(...path);
+          const color = ['BUS', 'SUBWAY'].includes(segment.type) ? transitStyle?.(segment).color : null;
+          L.polyline(path, { renderer, bubblingMouseEvents: false, color: color || routeColors[segment.type],
+            weight: 5, opacity: 0.95, dashArray: segment.type === 'WALKING' ? '3 5' : null })
+            .addTo(layer);
+        }
+      } else {
+        L.polyline(points, { renderer, bubblingMouseEvents: false, color: colors[status], weight: c.id === selected ? 7 : 3,
+          opacity: c.id === selected ? 1 : 0.5, dashArray: c.mode === 'WALKING' ? '3 5' : '8 5' })
+          .bindTooltip(`${esc(c.id)} · ${esc(c.name)}`).on('click', choose).addTo(layer);
+      }
       for (const anchor of c.anchors || []) {
         L.circleMarker([anchor.lat, anchor.lon], { renderer, radius: 6, weight: 2,
           bubblingMouseEvents: false, color: colors[status], fillColor: colors[status], fillOpacity: 0.9 })
@@ -106,6 +128,7 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick) {
       ${trace.omitted ? `<p class="debug-warning">지도는 최대 ${trace.map_limit}개와 선택 후보를 표시합니다. 표와 단계 집계에는 전체 후보가 포함됩니다.</p>` : ''}
       <label>후보 선택 <select data-candidate><option value="">점수 상위 후보 보기</option>${trace.candidates.map(c => `<option value="${c.id}" ${selected === c.id ? 'selected' : ''}>${c.id} · ${esc(c.type)} · ${esc(c.name)}${c.result_index != null ? ' · 최종 생존' : ''}</option>`).join('')}</select></label>
       ${chosen ? `<div class="debug-detail"><b>${esc(chosen.id)} · ${esc(chosen.name)}</b><p>${esc(chosen.type)} · ${esc(TYPE_NAMES[chosen.type])} · ${chosen.mode === 'WALKING' ? '도보 대체' : '택시 연결'}</p>
+        <p>${step >= 3 && chosen.verified?.itinerary ? '검증 경로' : '예상 경로'}: ${(step >= 3 && chosen.verified?.itinerary || chosen.itinerary || []).map(esc).join(' → ')}</p>
         <p>${step < chosen.stage ? '현재 단계까지 유지 중' : esc(chosen.reason)}</p>
         ${chosen.related && step >= chosen.stage ? `<p>남긴 후보: <button type="button" data-related="${chosen.related}">${chosen.related}</button></p>` : ''}
         ${step === last && chosen.result_index != null ? `<p>Pareto: ${chosen.pareto ? '시간·요금 모두 더 나은 다른 경로 없음' : '다른 경로가 시간·요금에서 우세 — 결과에는 유지'}</p><button type="button" data-result="${chosen.result_index}">최종 경로 카드·지도 보기</button>` : ''}</div>` : ''}
@@ -116,12 +139,12 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick) {
     el.querySelectorAll('[data-nav]').forEach(b => b.addEventListener('click', () => { step += Number(b.dataset.nav); render(); }));
     el.querySelector('[data-map]').addEventListener('change', e => { showMap = e.target.checked; paintMap(); });
     el.querySelector('[data-fit]').addEventListener('click', () => { showMap = true; render(); paintMap(true); });
-    el.querySelector('[data-candidate]').addEventListener('change', e => { selected = e.target.value || null; render(); });
+    el.querySelector('[data-candidate]').addEventListener('change', e => selectCandidate(e.target.value));
     el.querySelector('[data-direction]')?.addEventListener('change', e => { direction = e.target.value; render(); });
     el.querySelector('[data-buffer-kind]')?.addEventListener('change', e => { bufferKind = e.target.value; render(); });
     el.querySelectorAll('[data-related]').forEach(b => b.addEventListener('click', () => {
       const scrollTop = el.querySelector('.debug-table-wrap').scrollTop;
-      selected = b.dataset.related; render();
+      selectCandidate(b.dataset.related);
       el.querySelector('.debug-table-wrap').scrollTop = scrollTop;
     }));
     el.querySelector('[data-result]')?.addEventListener('click', e => { showMap = false; render(); onSelectResult(Number(e.target.dataset.result)); });
@@ -131,5 +154,6 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick) {
     enable(value) { enabled = value; render(); },
     setTrace(value) { trace = value || null; step = 0; selected = null; showMap = true; render(); },
     clear() { trace = null; selected = null; layer.clearLayers(); render(); },
+    hideMap() { showMap = false; render(); },
   };
 }

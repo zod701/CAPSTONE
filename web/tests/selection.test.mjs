@@ -11,6 +11,7 @@ test('taxi, transit and hybrid selections replace each other on cards and map', 
   const state = { transit: { routes: [{}] }, hybrid: { routes: [{ anchor: {}, taxi: {}, transit: {} }] }, car: {}, carOn: false };
   let key = null, taxiSelected = false, transitDrawn = false, taxiDrawn = false;
   const context = vm.createContext({ state, $: id => id, revealSelectedCard() {},
+    hybridDebug: { hideMap() {} },
     panel: { showSelection: draw => draw() }, L: { latLng: () => ({}) },
     R: {
       markSelected: (_, i) => key = `t:${i}`, markSelectedKey: k => key = k,
