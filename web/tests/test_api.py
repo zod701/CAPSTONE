@@ -726,13 +726,14 @@ def test_car(client, up):
 def test_quota(client):
     q = client.get("/api/quota").json()
     assert set(q) == {"date", "transit", "car", "keyword", "address",
-                      "gyeonggi_bus", "seoul_bus", "seoul_subway"}
+                      "gyeonggi_bus", "seoul_bus", "incheon_bus", "incheon_route", "seoul_subway"}
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", q["date"])
     assert q["transit"] == {"used": 0, "limit": 1000, "remaining": 1000}
     assert q["car"] == {"used": 0, "limit": 10000, "remaining": 10000}
     assert q["keyword"] == q["address"] == {"used": 0, "limit": 100000, "remaining": 100000}
     # 도착정보 세 원천은 개발계정 한도와 같게 1,000건/일
     assert q["gyeonggi_bus"] == q["seoul_bus"] == q["seoul_subway"] == {"used": 0, "limit": 1000, "remaining": 1000}
+    assert q["incheon_bus"] == q["incheon_route"] == q["seoul_bus"]
 
 
 # --- /api/search ---

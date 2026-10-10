@@ -227,7 +227,7 @@ def test_updown_double_registered_counts_rows_and_suffix_pairs():
 def test_drops_other_bis_invalid_and_residual():
     recs = [rec("GGB400000001", "강원쪽", OUT_LON, 37.5),                 # 인접 시도 → 제외
             rec("GGB400000002", "좌표없음", SEOUL_LON, None),             # 좌표 무효 → 제외
-            rec("ICB400000003", "인천BIS", SEOUL_LON, 37.5),             # 타 BIS → 세기만
+            rec("BSB400000003", "부산BIS", SEOUL_LON, 37.5),             # 타 BIS → 세기만
             rec("GGB400000004", "동명", GG_LON, 37.2), rec("GGB400000005", "동명", GG_LON, north(37.2, 2)),
             rec("GGB277100001", "차고지(미정차)", GG_LON, 37.1)]
     out, info = run(recs)
@@ -235,7 +235,7 @@ def test_drops_other_bis_invalid_and_residual():
     assert out.loc["277100001", "is_virtual"] == 1
     assert dict(zip(info["dropped"]["정류장번호"], info["dropped"]["drop_reason"])) == {
         "GGB400000001": "outside_region", "GGB400000002": "invalid_coord"}
-    assert info["others"]["정류장번호"].tolist() == ["ICB400000003"]
+    assert info["others"]["정류장번호"].tolist() == ["BSB400000003"]
     assert len(info["residual"]) == 1   # 2 m 동명 쌍 — 검토용으로만 보고
 
 
@@ -315,3 +315,29 @@ def test_refresh_coord_override():
         refresh(NATIONAL, SEOUL_STATIONS, GBIS_STATIONS, stub_assign, fix.assign(name="다른이름"))
     with pytest.raises(ValueError, match="어느 레코드에도"):
         refresh(NATIONAL, SEOUL_STATIONS, GBIS_STATIONS, stub_assign, fix.assign(source_id="SEB100000002"))
+
+
+def test_incheon_stop_added_and_three_sources_merged_without_changing_key():
+    records = pair('100000001', '환승센터', '환승센터', 5)
+    records += [rec('ICB100000001', '환승센터', SEOUL_LON, north(37.5, 10), '12345'),
+                rec('ICB100000002', '인천단독', GG_LON, 37.4)]
+    out, info = run(records)
+    assert set(out.index) == {'100000001', '100000002'}
+    assert out.loc['100000001', 'source_ids'] == 'GGB100000001|SEB100000001|ICB100000001'
+    assert out.loc['100000002', 'rep_source'] == 'ICB'
+    assert info['dropped'].empty
+
+
+def test_incheon_same_id_different_platform_is_kept_separate():
+    records = [rec('GGB100000001', '출발', GG_LON, 37.4),
+               rec('ICB100000001', '다른승강장', GG_LON, north(37.4, 400))]
+    out, _ = run(records)
+    assert set(out.index) == {'100000001', '100000001-ICB'}
+
+
+def test_incheon_outside_and_invalid_coordinates_are_excluded():
+    out, info = run([rec('GGB100000001', '유효', GG_LON, 37.4),
+                     rec('ICB100000002', '권역밖', OUT_LON, 37.4),
+                     rec('ICB100000003', '좌표없음', GG_LON, None)])
+    assert list(out.index) == ['100000001']
+    assert len(info['dropped']) == 2

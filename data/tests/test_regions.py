@@ -107,6 +107,7 @@ def test_result_aligned_with_input(idx):
     ("4159700000", "41590"),   # 화성시동탄구 → 화성시
     ("4115000000", "41150"),   # 일반구 없는 시
     ("1111053000", "11110"),   # 서울 종로구
+    ("2812553000", "28125"),   # 인천 제물포구
 ])
 def test_sgg_code(adm_cd2, want):
     assert sgg_code(adm_cd2) == want
@@ -114,7 +115,7 @@ def test_sgg_code(adm_cd2, want):
 
 def test_sgg_code_rejects_other_sido():
     with pytest.raises(ValueError):
-        sgg_code("2811000000")
+        sgg_code("2611000000")
 
 
 @pytest.mark.parametrize("sggnm, sido, want", [

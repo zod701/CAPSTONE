@@ -1,4 +1,4 @@
-"""도시철도 역 순서표 (노선정보 표준데이터 `정거장구성` → 노선별 역 순서, 서울·경기).
+"""도시철도 역 순서표 (노선정보 표준데이터 `정거장구성` → 노선별 역 순서, 서울·인천·경기).
 
 1) ref/subway_seq_lines.csv 에 적힌 노선정보 행만 쓴다 — 원천 노선번호가 틀리거나 겹치는 행이 있어(분당선에
    수인선 번호, 경부선·1호선 같은 번호) 노선번호 + 노선명으로 고르고, 역 DB 의 운영 노선(line_raw)에 잇는다
@@ -36,7 +36,7 @@ GTXA_LINE = "GTX-A"
 GTXA_SEGMENTS = (("north", "북부"), ("south", "남부"))
 EXPECTED_PARTS = {GTXA_LINE: (2, "서울역–수서 미연결")}  # 노선군이 원래 여러 덩어리인 경우
 ACTIONS = ("rename", "insert_before", "insert_after", "move_before", "branch", "loop")
-IN_SCOPE_ADDR = re.compile(r"^(서울|경기)")
+IN_SCOPE_ADDR = re.compile(r"^(서울|인천|경기)")
 COLUMNS = ["chain_id", "chain_name", "line_group", "line_raw", "loop", "seq", "station_id", "phys_id", "name",
            "lat", "lon", "status", "source", "src_no", "src_name"]
 
@@ -316,7 +316,7 @@ def components(out):
 
 def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="도시철도 역 순서표 (서울·경기)")
+    ap = argparse.ArgumentParser(description="도시철도 역 순서표 (서울·인천·경기)")
     ap.add_argument("--src", type=Path, default=ROOT / "data" / "csv" / "전체_도시철도노선정보_20260630.xlsx")
     ap.add_argument("--raw-stations", type=Path, default=ROOT / "data" / "csv" / "전체_도시철도역사정보_20260630.xlsx",
                     help="원천 역 파일 — 역 DB 에 없는 이름이 권역 밖인지 가르는 데만 쓴다 (주소)")

@@ -1,4 +1,4 @@
-"""버스 노선–정류소 순서표 (서울 노선별 정류소 + 경기 GBIS 노선–정류소 → 노선별 정류소 순서, 서울·경기).
+"""버스 노선–정류소 순서표 (서울 노선별 정류소 + 경기 GBIS + 수집 완료한 인천 API).
 
 1) 원천 두 개를 같은 꼴로: 서울 OA-1095(ROUTE_ID·순번·NODE_ID) · 경기 GBIS(routeId·staOrder·stationId·upDown).
    두 원천의 노선은 겹치지 않는다(경기로 드나드는 서울 노선은 서울 원천에만, 경기 노선은 GBIS 에만) — 노선 ID 가 겹치면 실패.
@@ -22,6 +22,8 @@ from build_boundaries import ATTRIBUTION
 from fetch_boundary import KST, ROOT, file_line, md_table, rel
 from fetch_gbis import latest, read_gbis
 from fetch_seoul_routes import latest as latest_seoul_routes
+from fetch_incheon_routes import latest as latest_incheon_routes
+from incheon_api import ROUTE_TYPES as INCHEON_TYPES
 from geoutil import haversine_m
 from regions import RegionIndex
 from textnorm import is_virtual, name_key
@@ -30,7 +32,7 @@ SNAP_MAX_M = 2000.0      # 정류소 정제와 같은 값
 COORD_WARN_M = 300.0     # 원천 좌표와 DB 좌표가 이보다 멀면 보고 (같은 ID 가 다른 정류소에 다시 쓰였을 수 있다)
 LONG_GAP_M = 10000.0     # 보고서에 세는 긴 인접 구간
 IN_SCOPE = ("contain", "snap")
-PREFIX = {"seoul": "SEB", "gyeonggi": "GGB"}
+PREFIX = {"seoul": "SEB", "gyeonggi": "GGB", "incheon": "ICB"}
 SRC_COLUMNS = ["route_id", "route_name", "source", "seq", "updown", "station_id", "src_name", "src_lon", "src_lat"]
 COLUMNS = ["route_id", "route_name", "route_type", "route_type_src", "source", "seq", "updown", "stop_key", "name",
            "lat", "lon", "in_db", "is_virtual"]
@@ -100,6 +102,34 @@ def normalize(seoul, gbis):
     return src[SRC_COLUMNS]
 
 
+def normalize_incheon(routes, sections, stops):
+    """ICB ID로 기존 정류소 좌표를 연결. TM 좌표를 경위도로 오인하지 않는다.
+
+    DB에 없는 정류소는 별도 목록으로 보고한다. 미검증 좌표 변환/이름 추정은 하지 않는다.
+    """
+    by_source = {sid[3:]: r for r in stops.to_dict("records") for sid in r["source_ids"].split("|")
+                 if sid.startswith("ICB")}
+    by_key = {r["stop_key"]: r for r in stops.to_dict("records")}
+    meta = routes.set_index("ROUTEID")
+    rows, missing = [], []
+    for r in sections.to_dict("records"):
+        rid, sid = r["ROUTEID"], r["BSTOPID"]
+        if rid not in meta.index or not re.fullmatch(r"\d{9}", sid):
+            raise ValueError("인천 경유 정류소의 노선 또는 정류소 ID가 잘못되었습니다")
+        stop = by_source.get(sid) or by_key.get(sid)
+        if stop is None:
+            missing.append(r)
+            continue
+        rows.append({"route_id": rid, "route_name": meta.loc[rid, "ROUTENO"], "source": "incheon",
+                     "seq": int(r["BSTOPSEQ"]), "updown": {"0": "상행", "1": "하행", "2": "순환"}.get(r["DIRCD"], ""),
+                     "station_id": sid, "src_name": r.get("BSTOPNM") or stop["name"],
+                     "src_lon": float(stop["lon"]), "src_lat": float(stop["lat"])})
+    src = pd.DataFrame(rows, columns=SRC_COLUMNS)
+    if src.duplicated(["route_id", "seq"]).any():
+        raise ValueError("인천 (노선, 순번)이 중복됩니다")
+    return src, missing
+
+
 def build(src, stops, assign, types=None):
     """→ (출력 DataFrame, 보고용 dict). assign(lons, lats) 는 RegionIndex.assign 과 같은 dict 목록을 돌려준다.
     types = {route_id: (route_type, route_type_src)} — 없는 노선은 빈칸."""
@@ -150,13 +180,15 @@ def build(src, stops, assign, types=None):
 
 def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="버스 노선–정류소 순서표 (서울·경기)")
+    ap = argparse.ArgumentParser(description="버스 노선–정류소 순서표 (서울·경기·인천)")
     ap.add_argument("--seoul", type=Path, default=ROOT / "data" / "csv" / "서울시버스노선별정류소정보(20260902).xlsx")
     ap.add_argument("--gbis", type=Path, default=None,
                     help="GBIS 노선–정류소 파일 (기본: data/external/gbis/ 의 가장 최근 버전 — fetch_gbis.py 로 받는다)")
     ap.add_argument("--gbis-routes", type=Path, default=None, help="GBIS 노선 파일 — 노선 유형 (기본: 가장 최근 버전)")
     ap.add_argument("--seoul-routes", type=Path, default=None,
                     help="서울 노선 목록 — 노선 유형 (기본: 가장 최근 날짜 — fetch_seoul_routes.py 로 받는다)")
+    ap.add_argument("--incheon", type=Path, default=None,
+                    help="인천 routes.csv·sections.csv 폴더 (기본: 가장 최근 수집 완료분, 없으면 생략)")
     ap.add_argument("--stops", type=Path, default=ROOT / "data" / "processed" / "bus_stops.csv")
     ap.add_argument("--boundaries", type=Path, default=ROOT / "data" / "processed" / "admin_sgg.geojson")
     ap.add_argument("--out", type=Path, default=ROOT / "data" / "processed" / "bus_route_stops.csv")
@@ -166,6 +198,7 @@ def main(argv=None):
         args.gbis = args.gbis or latest("routestation")
         args.gbis_routes = args.gbis_routes or latest("route")
         args.seoul_routes = args.seoul_routes or latest_seoul_routes()
+        args.incheon = args.incheon or latest_incheon_routes()
     except FileNotFoundError as e:
         sys.exit(f"실패: {e}")
 
@@ -178,11 +211,26 @@ def main(argv=None):
     try:
         seoul_types = seoul_route_types(pd.read_csv(args.seoul_routes, dtype=str, encoding="utf-8-sig").fillna(""))
         types = {**seoul_types, **gbis_route_types(read_gbis(args.gbis_routes))}
-        out, info = build(normalize(seoul, gbis), stops, regions.assign, types)
+        src = normalize(seoul, gbis)
+        missing_ic = []
+        if args.incheon:
+            ic_routes = pd.read_csv(args.incheon / "routes.csv", dtype=str).fillna("")
+            ic_sections = pd.read_csv(args.incheon / "sections.csv", dtype=str).fillna("")
+            ic, missing_ic = normalize_incheon(ic_routes, ic_sections, stops)
+            if set(src["route_id"]) & set(ic["route_id"]):
+                raise ValueError("인천 노선 ID가 서울·경기 순서표와 겹칩니다")
+            types.update(_types(ic_routes["ROUTEID"], ic_routes["ROUTETPCD"], INCHEON_TYPES, "인천"))
+            src = pd.concat([src, ic], ignore_index=True)
+            inputs.extend(file_line(args.incheon / name) for name in ("routes.csv", "sections.csv"))
+        out, info = build(src, stops, regions.assign, types)
     except ValueError as e:
         sys.exit(f"실패: {e}")
     args.out.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(args.out, index=False, encoding="utf-8-sig", float_format="%.7f")
+    if args.incheon:
+        args.report.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(missing_ic, columns=ic_sections.columns).to_csv(
+            args.report.with_name("incheon_unmatched_stops.csv"), index=False, encoding="utf-8-sig")
 
     src = info["src"]
     how_labels = [("own", "정류소 DB 행 — 자기 BIS 레코드"), ("key", "정류소 DB 행 — 다른 BIS 만 등록 (ID = stop_key)"),
@@ -190,7 +238,8 @@ def main(argv=None):
     ferry = seoul[seoul["노선명"].str.match(FERRY_ROUTE)]
     steps = [("서울 원천 중 배 노선 (한강버스) — 뺌", f"{ferry['ROUTE_ID'].nunique()} 노선 · {len(ferry)} 행")]
     for label, sub, o in (("서울", src[src["source"] == "seoul"], out[out["source"] == "seoul"]),
-                          ("경기", src[src["source"] == "gyeonggi"], out[out["source"] == "gyeonggi"])):
+                          ("경기", src[src["source"] == "gyeonggi"], out[out["source"] == "gyeonggi"]),
+                          ("인천", src[src["source"] == "incheon"], out[out["source"] == "incheon"])):
         steps += [(f"{label} 원천 행", len(sub)), (f"{label} 원천 노선", sub["route_id"].nunique()),
                   (f"{label} 원천 정류소 (고유 ID)", sub["station_id"].nunique())]
         for h, text in how_labels:
@@ -216,7 +265,8 @@ def main(argv=None):
     n_stops = out.groupby("route_id").size()
     route_rows = [(label, o["route_id"].nunique(), int(o.groupby("route_id").size().median()),
                    int(o.groupby("route_id").size().max()))
-                  for label, o in (("서울", out[out["source"] == "seoul"]), ("경기", out[out["source"] == "gyeonggi"]))]
+                  for label, o in (("서울", out[out["source"] == "seoul"]), ("경기", out[out["source"] == "gyeonggi"]),
+                                   ("인천", out[out["source"] == "incheon"])) if len(o)]
     per_route = out.drop_duplicates("route_id")
     type_rows = [(s, t or "(없음)", ts or "-", n) for (s, t, ts), n in
                  per_route.groupby(["source", "route_type", "route_type_src"]).size().sort_values(ascending=False).items()]
@@ -235,9 +285,10 @@ def main(argv=None):
         f"- 실행 시각: {datetime.now(KST):%Y-%m-%d %H:%M:%S} KST",
         *[f"- 입력: {s}" for s in inputs],
         f"- 출력: {file_line(args.out)}",
+        f"- 인천 정류소 DB 미매칭: {len(missing_ic)}행 (수집분이 있으면 incheon_unmatched_stops.csv 참고)",
         f"- 파라미터: snap 최대 {SNAP_MAX_M:,.0f} m, 좌표 차이 경고 > {COORD_WARN_M:,.0f} m, 긴 인접 구간 > {LONG_GAP_M / 1000:.0f} km",
         "- 원천: 서울 열린데이터광장 OA-1095 서울시 버스노선별 정류소 정보(공공누리 1유형) · "
-        "경기도 버스정보 기반정보 노선–정류소 (data.go.kr 15080658)",
+        "경기도 버스정보 기반정보 노선–정류소 (data.go.kr 15080658) · 인천 버스노선 조회 (data.go.kr 15058487, 수집분이 있는 경우)",
         f"- {ATTRIBUTION}",
         "- 한 행 = 노선의 정류소 하나. `seq` 는 원천 순번 그대로(운행 순서, 비어 있을 수 있음) — 같은 노선에서 작을수록 상류. "
         "경기의 `updown` 은 상행 → 하행 순으로 한 순번열에 이어지고 첫 하행이 회차 정류소다. 서울은 `updown` 이 없다.",

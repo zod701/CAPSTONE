@@ -1,4 +1,4 @@
-"""도시철도역 정제 (전국도시철도역사정보표준데이터 → 서울·경기 역).
+"""도시철도역 정제 (전국도시철도역사정보표준데이터 → 서울·인천·경기 역).
 
 0) 원천 행 보정 — 다른 역의 좌표가 들어간 행(ref/subway_coord_overrides.csv), 서지 않는 노선으로 잘못 들어간 행
    (ref/subway_station_drops.csv). (line_raw, 역번호) 로 찾고 역 이름까지 맞아야 적용한다
@@ -36,7 +36,7 @@ TWIN_M = 100.0                # 같은 노선의 다른 역이 이보다 가까�
 COLUMNS = ["station_id", "name", "name_norm", "name_key", "aliases", "line_raw", "line_code", "line_id",
            "line_group", "lat", "lon", "sido_cd", "sido_nm", "sgg_cd", "sgg_nm", "region_method",
            "operator", "is_transfer", "data_date"]
-_ADDR_IN_SCOPE = re.compile(r"^(서울|경기)")
+_ADDR_IN_SCOPE = re.compile(r"^(서울|인천|경기)")
 
 
 def collapse_ws(s):
@@ -243,7 +243,7 @@ def clean(raw, assign, line_map, station_overrides=None, coord_overrides=None, d
     info = {
         "steps": steps, "dups": dups, "clusters": clusters, "date_fmt": df["date_fmt"], "moved": moved, "removed": removed,
         "snapped": out[out["region_method"] == "snap"],
-        # 주소는 서울·경기인데 좌표가 대상 밖 → 원천 좌표 오류 의심
+        # 주소는 서울·인천·경기인데 좌표가 대상 밖 → 원천 좌표 오류 의심
         "addr_suspect": dropped[dropped["역사도로명주소"].str.match(_ADDR_IN_SCOPE)],
     }
     return out, info
@@ -281,7 +281,7 @@ def homonym_rows(out, clusters):
 
 def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="도시철도역 정제 (서울·경기)")
+    ap = argparse.ArgumentParser(description="도시철도역 정제 (서울·인천·경기)")
     ap.add_argument("--src", type=Path, default=ROOT / "data" / "csv" / "전체_도시철도역사정보_20260630.xlsx")
     ap.add_argument("--boundaries", type=Path, default=ROOT / "data" / "processed" / "admin_sgg.geojson")
     ap.add_argument("--line-map", type=Path, default=ROOT / "data" / "ref" / "subway_line_map.csv")
@@ -377,7 +377,7 @@ def main(argv=None):
                  ("line_raw", "line_group", "운영기관", "행", "기준일 범위", "오래됨", "빈 날짜", "무효 날짜",
                   "표시")),
         "",
-        "## 좌표 오류 의심 — 주소는 서울·경기인데 좌표가 대상 밖이라 제외된 행",
+        "## 좌표 오류 의심 — 주소는 서울·인천·경기인데 좌표가 대상 밖이라 제외된 행",
         "",
         table_or_none(suspect, ("노선명", "역번호", "역사명", "역사도로명주소", "위도, 경도", "판정")),
         "",

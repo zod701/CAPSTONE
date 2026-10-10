@@ -1,6 +1,6 @@
-"""행정동 → 시군구 경계 (서울 25구·경기 31시군 + 인접 시도 4피처).
+"""행정동 → 시군구 경계 (서울 25구·인천 11군구·경기 31시군 + 인접 시도 3피처).
 
-경기 일반구는 시 단위로 합친다(41111~41117 → 41110 수원시). 인접 시도(인천·강원·충북·충남)는
+경기 일반구는 시 단위로 합친다(41111~41117 → 41110 수원시). 인접 시도(강원·충북·충남)는
 시도 단위 1피처(`in_scope=false`)로 두어, 정류소가 "경계 밖"인지 "인접 시도 안"인지 가른다.
 """
 import argparse
@@ -15,8 +15,8 @@ from shapely.geometry import mapping, shape
 
 from fetch_boundary import DEFAULT_OUT, KST, ROOT, file_line, md_table, rel, sha256, verify
 
-SCOPE = {"11": 25, "41": 31}                 # 시도 → 기대 시군구 수
-NEIGHBOURS = ("28", "51", "43", "44")        # 인천·강원·충북·충남
+SCOPE = {"11": 25, "28": 11, "41": 31}       # 2026-07-01 경계 기준 시군구 수
+NEIGHBOURS = ("51", "43", "44")             # 강원·충북·충남
 SIMPLIFY_TOL = 0.0003                        # 도 (≈30 m)
 WEB_DECIMALS = 5
 WEB_MAX_BYTES = 1_000_000
@@ -27,11 +27,11 @@ _CITY_GU = re.compile(r"^(.+?시).+구$")
 def sgg_code(adm_cd2):
     """행정동 코드(10자리) → 시군구 코드(5자리). 경기는 일반구를 시로 합친다."""
     s = str(adm_cd2)
-    if s.startswith("11"):
+    if s.startswith(("11", "28")):
         return s[:5]
     if s.startswith("41"):
         return s[:4] + "0"
-    raise ValueError(f"서울·경기 행정동 코드가 아닙니다: {adm_cd2!r}")
+    raise ValueError(f"서울·인천·경기 행정동 코드가 아닙니다: {adm_cd2!r}")
 
 
 def sgg_name(sggnm, sido):
@@ -79,10 +79,11 @@ def build(fc):
     raw_gg = {f["properties"]["sgg"] for f in fc["features"] if str(f["properties"]["sido"]) == "41"}
     nb = [p for p, _ in feats if not p["in_scope"]]
     steps = [
-        ("인접 시도 행정동 (28·51·43·44)", sum(p["n_dong"] for p in nb)),
+        ("인접 시도 행정동 (51·43·44)", sum(p["n_dong"] for p in nb)),
         ("make_valid 대상 (무효 행정동)", n_invalid),
         ("경기 원 시군구 코드 (일반구 포함)", len(raw_gg)),
         ("서울 자치구 (in_scope)", got["11"]),
+        ("인천 군구 (in_scope)", got["28"]),
         ("경기 시군 (in_scope, 일반구 병합)", got["41"]),
         ("인접 시도 피처 (in_scope=false)", len(nb)),
     ]
@@ -102,7 +103,7 @@ def fc_bytes(features):
 
 def main():
     sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="행정동 → 시군구 경계 (서울 25구·경기 31시군 + 인접 시도)")
+    ap = argparse.ArgumentParser(description="행정동 → 시군구 경계 (서울 25구·인천 11군구·경기 31시군 + 인접 시도)")
     ap.add_argument("--src", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--out", type=Path, default=ROOT / "data" / "processed" / "admin_sgg.geojson")
     ap.add_argument("--web-out", type=Path, default=ROOT / "data" / "processed" / "admin_sgg_web.geojson")
@@ -139,7 +140,7 @@ def main():
         "",
         f"- 실행 시각: {datetime.now(KST):%Y-%m-%d %H:%M:%S} KST",
         f"- 입력: {src_line}",
-        f"- 파라미터: 대상 시도 11(서울)·41(경기), 인접 시도 {'·'.join(NEIGHBOURS)}, "
+        f"- 파라미터: 대상 시도 11(서울)·28(인천)·41(경기), 인접 시도 {'·'.join(NEIGHBOURS)}, "
         f"웹용 simplify {SIMPLIFY_TOL}° (preserve_topology), 좌표 소수 {WEB_DECIMALS}자리, "
         f"웹용 상한 {WEB_MAX_BYTES:,} B",
         f"- {ATTRIBUTION}",

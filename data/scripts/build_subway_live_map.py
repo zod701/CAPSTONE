@@ -25,7 +25,7 @@ from textnorm import name_key
 
 LIVE_XLSX = ROOT / "data" / "csv" / "실시간도착_역정보(20260902).xlsx"
 # 실시간 역정보 파일에 SUBWAY_ID 자체가 없는 노선군. 원천이 바뀌면(추가·제공 시작) 멈춘다.
-NO_LIVE_GROUPS = ("김포골드라인", "용인에버라인", "의정부경전철")
+NO_LIVE_GROUPS = ("김포골드라인", "용인에버라인", "의정부경전철", "인천1호선", "인천2호선", "자기부상철도")
 COLUMNS = ["station_id", "name", "line_group", "live_subway_id", "live_statn_id", "live_name",
            "match", "note", "data_date"]
 
@@ -258,7 +258,7 @@ def main(argv=None):
         "",
         md_table(info["leftover"], ("노선군", "역 수", "역")) if info["leftover"] else "없음",
         "",
-        "- 대부분 대상 지역 밖(인천·충남·강원)이거나 우리 역 DB 의 커버리지 경계다. 서울·경기인데 우리 역 DB 에 "
+        "- 대부분 대상 지역 밖(충남·강원)이거나 우리 역 DB 의 커버리지 경계다. 서울·인천·경기인데 우리 역 DB 에 "
         "없는 것(2호선 까치산, 경춘선 청량리·회기, 수인분당선 청량리)은 역 DB 빌드 쪽에서 판단할 일이다.",
         "",
         "## 한계",

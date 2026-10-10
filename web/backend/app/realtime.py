@@ -1,4 +1,4 @@
-"""공공데이터 실시간 도착정보 클라이언트 (경기 GBIS 버스 · 서울 TOPIS 버스 · 서울 도시철도).
+"""공공데이터 실시간 도착정보 클라이언트 (서울·경기·인천 버스 · 서울 도시철도).
 
 키가 URL 에 들어간다(버스는 serviceKey 파라미터, 지하철은 경로 한 칸) — 그래서 httpx 예외 문자열·요청 로그를
 쓰지 않고, 사용자 문구에는 원천의 아는 필드만 마스킹해 넣는다(tiles.py·kakao.py 규칙을 둘 다 지킨다).
@@ -13,6 +13,7 @@ from datetime import datetime
 from urllib.parse import quote, unquote
 
 import httpx
+from incheon_api import ARRIVAL_URL, ROUTE_URL, ROUTE_TYPES, IncheonError, parse_page
 
 from .errors import ApiError
 from .kakao import redact
@@ -26,9 +27,12 @@ SUBWAY_URL = ("http://swopenapi.seoul.go.kr/api/subway/{key}/json/realtimeStatio
 
 KIND_GG = "gyeonggi_bus"
 KIND_SEOUL = "seoul_bus"
+KIND_IC = "incheon_bus"
+KIND_IC_ROUTE = "incheon_route"
 KIND_SUBWAY = "seoul_subway"
 # 원천별 (키 환경변수, 활용신청 창구) — missing_key·arrivals_auth 문구에 쓴다
 KEY_ENV = {KIND_GG: ("DATA_GO_KR_API_KEY", "data.go.kr"), KIND_SEOUL: ("DATA_GO_KR_API_KEY", "data.go.kr"),
+           KIND_IC: ("DATA_GO_KR_API_KEY", "data.go.kr"), KIND_IC_ROUTE: ("DATA_GO_KR_API_KEY", "data.go.kr"),
            KIND_SUBWAY: ("SEOUL_SUBWAY_LIVE_API", "서울 열린데이터광장")}
 
 logging.getLogger("httpx").setLevel(logging.WARNING)  # 요청 로그(INFO)에 키가 든 URL 이 찍힌다
@@ -134,6 +138,35 @@ def _gateway_error(kind, body_text, limit):
 
 
 # --- 정규화 (순수 함수 — 저장·로그 없음) ---
+
+def bus_incheon(raw: dict) -> list[dict]:
+    """인천은 차량별 한 행, ARRIVALESTIMATETIME은 초. 255 좌석/혼잡도는 미제공."""
+    items = []
+    for row in raw["rows"]:
+        eta = _int(row.get("ARRIVALESTIMATETIME"))
+        ahead = _int(row.get("REST_STOP_COUNT"))
+        seats = _int(row.get("REMAIND_SEAT"))
+        crowd = _int(row.get("CONGESTION"))
+        last = row.get("LASTBUSYN")
+        eta = eta if eta is not None and eta >= 0 else None
+        items.append({
+            "source": "incheon", "route_id": row.get("ROUTEID") or None,
+            "route_name": None, "route_type": None,
+            "eta_s": eta, "n_stops_ahead": ahead if ahead is not None and ahead >= 0 else None,
+            "crowding": crowd if crowd in (1, 2, 3) else None,
+            "seats": seats if seats is not None and 0 <= seats < 255 else None,
+            "is_last": True if last == "1" else False if last == "0" else None,
+            "vehicle": row.get("BUS_NUM_PLATE") or None,
+            "message": None if eta is not None else "도착 정보가 없습니다.", "dest": None,
+        })
+    return items
+
+
+def incheon_routes(raw: dict) -> list[dict]:
+    return [{"id": row.get("ROUTEID"), "name": row.get("ROUTENO"),
+             "type": ROUTE_TYPES.get(row.get("ROUTETPCD"), (None, None))[0]}
+            for row in raw["rows"]]
+
 
 def _gg_item(row, n):
     """경기 busArrivalList 한 줄의 n(1·2)번째 차량 → item."""
@@ -304,7 +337,7 @@ class TtlCache:
 
 
 class RealtimeClient:
-    """세 원천을 같은 item 모양으로 돌려준다. Settings 는 받지 않고 값만 받는다(KakaoClient 와 같다)."""
+    """도착 원천들을 같은 item 모양으로 돌려준다. Settings 대신 값만 받는다(KakaoClient 와 같다)."""
 
     def __init__(self, http: httpx.AsyncClient, quota: QuotaGuard, *, data_go_kr_key: str | None = None,
                  subway_key: str | None = None, timeout_s: float = 5.0, ttl_s: float = 15.0,
@@ -316,6 +349,7 @@ class RealtimeClient:
         self.timeout_s = timeout_s
         self.now = now          # 벽시계 — 도시철도 예측을 수신 시각 기준으로 보정한다(캐시의 clock 과 다른 축)
         self.cache = TtlCache(ttl_s, clock)
+        self.route_cache = TtlCache(86400, clock)  # 정적 노선명·유형은 하루 동안 재사용
         self._inflight = {}   # cache_key → 진행 중 호출의 Future (같은 키를 동시에 부르면 합류한다)
 
     async def gyeonggi_stop(self, stop_key: str) -> list[dict]:
@@ -330,6 +364,17 @@ class RealtimeClient:
         key = self._key(KIND_SEOUL)
         params = {"stId": stop_key, "resultType": "json", "serviceKey": key}
         return await self._items(KIND_SEOUL, key, (KIND_SEOUL, stop_key), SEOUL_STOP_URL, params, bus_seoul)
+
+    async def incheon_stop(self, stop_key: str) -> list[dict]:
+        key = self._key(KIND_IC)
+        params = {"bstopId": stop_key, "pageNo": 1, "numOfRows": 1000, "serviceKey": unquote(key)}
+        return await self._items(KIND_IC, key, (KIND_IC, stop_key), ARRIVAL_URL, params, bus_incheon)
+
+    async def incheon_route(self, route_id: str) -> list[dict]:
+        key = self._key(KIND_IC_ROUTE)
+        params = {"routeId": route_id, "pageNo": 1, "numOfRows": 1000, "serviceKey": unquote(key)}
+        return await self._items(KIND_IC_ROUTE, key, (KIND_IC_ROUTE, route_id),
+                                 ROUTE_URL + "/getBusRouteId", params, incheon_routes, cache=self.route_cache)
 
     async def subway_station(self, live_name: str, subway_id: str | None = None) -> list[dict]:
         """서울 도시철도: 실시간 API 이름으로 부르고 subway_id(노선)로 거른다. 역명은 경로 한 칸이라 quote 한다.
@@ -348,10 +393,11 @@ class RealtimeClient:
                            action=f".env 에 {env} 를 추가하고 서버를 다시 시작하세요.", status=503)
         return key
 
-    async def _items(self, kind, key, cache_key, url, params, parse):
+    async def _items(self, kind, key, cache_key, url, params, parse, *, cache=None):
         """캐시 → 진행 중인 같은 호출에 합류 → 쿼터 예약 → 호출 → 정규화.
         캐시 히트와 합류는 쿼터를 쓰지 않고, 오류는 캐시하지 않는다."""
-        hit = self.cache.get(cache_key)
+        cache = self.cache if cache is None else cache
+        hit = cache.get(cache_key)
         if hit is not None:
             return hit
         flight = self._inflight.get(cache_key)
@@ -368,7 +414,7 @@ class RealtimeClient:
             raise
         else:
             fut.set_result(items)
-            self.cache.put(cache_key, items)
+            cache.put(cache_key, items)
             return items
         finally:
             del self._inflight[cache_key]
@@ -391,7 +437,11 @@ class RealtimeClient:
             raise ApiError("upstream_error", f"{label} 응답을 받지 못했습니다.",
                            action="잠시 후 다시 시도하세요.", status=502) from None
         try:
-            items = parse(self._body(kind, r))
+            body = self._body(kind, r)
+            items = parse(body)
+            if kind in (KIND_IC, KIND_IC_ROUTE):
+                if body["page"] != params["pageNo"]:
+                    raise _upstream(kind, "응답 페이지 번호가 요청과 다릅니다.")
         except ApiError as err:
             # 원천이 키를 에코한 경우까지 마지막에 한 번 더 — 보낸 형태까지 가린 뒤에 자른다
             err.message = _clip(mask(err.message, *_key_forms(key)))
@@ -400,10 +450,24 @@ class RealtimeClient:
             elif err.code == "arrivals_auth":     # 원천 쿼터를 쓰지 않은 거절
                 self.quota.release(kind, day)
             raise
+        # 뒤 페이지의 인증 실패로 이미 성공한 앞 페이지 쿼터까지 환급하지 않는다.
+        if kind in (KIND_IC, KIND_IC_ROUTE) and body["page"] * body["size"] < body["total"]:
+            items.extend(await self._fetch(kind, key, url, {**params, "pageNo": body["page"] + 1}, parse))
         return items
 
     def _body(self, kind, r):
         """HTTP 상태·본문 형식 판정 → 본문 dict. 본문 문자열은 어디에도 남기지 않는다(키를 에코할 수 있다)."""
+        if kind in (KIND_IC, KIND_IC_ROUTE) and r.status_code in (200, 403):
+            try:
+                body = parse_page(r.content)
+            except IncheonError as err:
+                if err.code in ("20", "30", "31", "32"):
+                    raise _auth_error(kind, upstream_status=r.status_code) from None
+                if err.code == "22":
+                    raise exceeded_error(kind, self.quota.limits.get(kind)) from None
+                raise _upstream(kind, f"인천 API 오류 코드 {err.code}", status_code=r.status_code) from None
+            if r.status_code == 200:
+                return body
         if r.status_code == 401:                  # 서울 버스 실측: 미신청 키·키 오류
             raise _auth_error(kind)
         if r.status_code == 429:

@@ -1,8 +1,8 @@
-"""버스 정류소 정제 (국토교통부 전국 버스정류장 CSV + 두 BIS 최신 정류소 파일 → 서울·경기 정류소).
+"""버스 정류소 정제 (국토교통부 전국 버스정류장 CSV + 두 BIS 최신 정류소 파일 → 서울·인천·경기 정류소).
 
 0) 전국 원본(연 1회 갱신)의 GGB·SEB 레코드를 두 BIS 의 최신 정류소 파일로 바꾼다 — refresh() 참고
-1) 관리기관 접두 GGB(경기BIS)·SEB(서울BIS)만 쓴다. 타 BIS 는 suffix 체계가 달라 병합할 수 없어
-   대상 지역 안의 건수만 센다.
+1) GGB(경기BIS)·SEB(서울BIS) 쌍을 정제한 뒤 ICB(인천BIS)를 추가한다.
+   ICB는 같은 ID와 좌표·이름 검사를 통과한 기존 행에 병합하고, 타 BIS는 건수만 센다.
 2) 좌표 → RegionIndex 로 시군 판정 (도시명은 믿지 않는다 — SEB 는 소재지와 무관하게 전부 서울특별시)
 3) 정류장번호 뒤 9자리(suffix)가 같은 GGB·SEB 쌍 = 한 정류소의 이중 등록. 판정(먼저 맞는 규칙):
    override → ≤ 50 m 병합(이름 무관) → 50–300 m 이고 이름 호환이면 병합 → 그 외 분리
@@ -216,11 +216,11 @@ def clean(raw, assign, overrides=None):
     df = df.assign(prefix=df["정류장번호"].str[:3], lon=pd.to_numeric(df["경도"], errors="coerce"),
                    lat=pd.to_numeric(df["위도"], errors="coerce"))
     df = pd.concat([df, pd.DataFrame(assign(df["lon"].tolist(), df["lat"].tolist()), index=df.index)], axis=1)
-    ours = df["prefix"].isin(PREFIXES)
+    ours = df["prefix"].isin((*PREFIXES, "ICB"))
     others = df[~ours & df["region_method"].isin(IN_SCOPE)]
     steps = [("입력 레코드 (GGB·SEB 는 최신 파일로 교체한 뒤)", len(df))]
-    steps += [(f"{p} 레코드", int((df["prefix"] == p).sum())) for p in PREFIXES]
-    steps += [("GGB+SEB 유지", int(ours.sum()))]
+    steps += [(f"{p} 레코드", int((df["prefix"] == p).sum())) for p in (*PREFIXES, "ICB")]
+    steps += [("GGB+SEB+ICB 유지", int(ours.sum()))]
     steps += [(f"타 BIS 중 대상 지역 {m} — 제외", int((others["region_method"] == m).sum())) for m in IN_SCOPE]
 
     g = df[ours].reset_index(drop=True)
@@ -234,7 +234,7 @@ def clean(raw, assign, overrides=None):
     g["in_scope"] = g["region_method"].isin(IN_SCOPE)
 
     groups = defaultdict(dict)
-    for r in g.to_dict("records"):
+    for r in g[g["prefix"].isin(PREFIXES)].to_dict("records"):
         groups[r["suffix"]][r["prefix"]] = r
     pair_keys = {s for s, m in groups.items() if len(m) == 2}
     unknown = sorted(set(overrides) - pair_keys)
@@ -261,6 +261,30 @@ def clean(raw, assign, overrides=None):
             rows.append(merged_row(sfx, rep, twin, decision, d))
         pairs.append({"stop_key": sfx, "ggb": a, "seb": b, "rep": rep, "dist_m": d, "decision": decision,
                       "in_scope": a["in_scope"] or b["in_scope"], "override": (action, keep) if action else None})
+
+    # 인천 원천은 기존 GGB·SEB 병합 결과에 추가한다. 같은 국가 정류소 ID라도
+    # 좌표·이름 검사를 통과해야 합치고, 다른 승강장은 ICB 접미로 분리한다.
+    by_suffix = defaultdict(list)
+    for row in rows:
+        by_suffix[row["stop_key"].split("-")[0]].append(row)
+    for r in g[g["prefix"] == "ICB"].to_dict("records"):
+        candidates = by_suffix[r["suffix"]]
+        match = None
+        for row in candidates:
+            if r["in_scope"] and row["region_method"] in IN_SCOPE:
+                d = haversine_m(row["lon"], row["lat"], r["lon"], r["lat"])
+                if decide(d, row["name"], r["정류장명"]) != "split":
+                    match = row
+                    break
+        if match is not None:
+            match["source_ids"] += "|" + r["정류장번호"]
+            match["aliases"] = "|".join(dict.fromkeys(n for n in
+                (*match["aliases"].split("|"), r["정류장명"]) if n and n != match["name"]))
+            match["ars_nos"] = "|".join(dict.fromkeys(n for n in
+                (*match["ars_nos"].split("|"), ars_no(r["모바일단축번호"])) if n))
+        else:
+            key = r["suffix"] + ("-ICB" if candidates else "")
+            rows.append(_row(key, r, "split" if candidates else "single"))
 
     out = pd.DataFrame(rows)
     out = out[out["region_method"].isin(IN_SCOPE)].sort_values("stop_key").reset_index(drop=True)
@@ -340,7 +364,7 @@ def review_rows(pairs):
 
 def crosstab_rows(records):
     """(접두, 원 도시명 시도) × 판정 시도 교차표."""
-    cols = ("서울특별시", "경기도", "대상 밖")
+    cols = ("서울특별시", "인천광역시", "경기도", "대상 밖")
     judged = records["sido_nm"].where(records["region_method"].isin(IN_SCOPE), "대상 밖")
     ct = Counter(zip(records["prefix"], records["도시명"].str.split().str[0], judged))
     keys = sorted({(p, s) for p, s, _ in ct}, key=lambda k: (k[0], -sum(ct[(*k, c)] for c in cols)))
@@ -349,7 +373,7 @@ def crosstab_rows(records):
 
 def main(argv=None):
     sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="버스 정류소 정제 (서울·경기, GGB·SEB 병합)")
+    ap = argparse.ArgumentParser(description="버스 정류소 정제 (서울·인천·경기, GGB·SEB·ICB 병합)")
     ap.add_argument("--src", type=Path, default=ROOT / "data" / "csv" / "국토교통부_전국 버스정류장 위치정보_20251031.csv")
     ap.add_argument("--seoul-stations", type=Path, default=ROOT / "data" / "csv" / "서울시버스정류소위치정보(20260902).xlsx")
     ap.add_argument("--gbis-stations", type=Path, default=None,
@@ -394,7 +418,7 @@ def main(argv=None):
     other_rows = [(p, "·".join(dict.fromkeys(o["관리도시명"])),
                    *(int((o["region_method"] == m).sum()) for m in IN_SCOPE))
                   for p, o in sorted(info["others"].groupby("prefix"), key=lambda kv: -len(kv[1]))]
-    in_label = info["dropped"][info["dropped"]["도시명"].str.match(r"^(서울특별시|경기도)")]
+    in_label = info["dropped"][info["dropped"]["도시명"].str.match(r"^(서울특별시|인천광역시|경기도)")]
     label_rows = [(r["정류장번호"], r["정류장명"], r["도시명"], r["detail"]) for _, r in in_label.iterrows()]
     snapped = out[out["region_method"] == "snap"]
     snap_rows = [(r["stop_key"], r["name"], r["sgg_nm"], r["snap_dist_m"], _cell(r["source_ids"]),
@@ -460,7 +484,7 @@ def main(argv=None):
         "",
         md_table(ct_rows, ct_headers),
         "",
-        "## 도시명은 서울·경기인데 제외된 레코드",
+        "## 도시명은 서울·인천·경기인데 제외된 레코드",
         "",
         table_or_none(label_rows, ("정류장번호", "정류장명", "도시명", "판정")),
         "",

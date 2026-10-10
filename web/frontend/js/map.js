@@ -82,7 +82,7 @@ export function createMap(el, { onError = () => {}, onPlaceClick = () => {} } = 
   const layerControl = new LayersTree(bases, {
     "버스 정류장": busLayer,
     "지하철역": subwayLayer,
-    "시군구 경계": boundaryLayer, // 서울 구 + 경기 시·군 (경기 일반구는 시로 합친 그대로)
+    "시군구 경계": boundaryLayer, // 서울·인천 군구 + 경기 시·군 (경기 일반구는 시로 합친 그대로)
     "경로": routeLayer,
     "매칭 진단": diagLayer,
   }, { collapsed: true }).addTo(map);

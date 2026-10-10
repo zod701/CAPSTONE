@@ -6,7 +6,7 @@ import { busColor, chipStyle } from "./routes.js";
 // 강조는 노선 유형 색(칩과 같은 색). 지도의 강조 점은 흰 채움 + 유형 색 테두리 — 지하철역 점(색 채움 + 흰 테두리)과 모양이
 // 반대라 같은 계열 색(직행 빨강·신분당선 등)이어도 헷갈리지 않는다. 노랑(마을) 같은 밝은 색도 밝은 지도에서 보이게 아래에 반투명 검은 윤곽
 const CASING = { color: "#000000", opacity: 0.45, weight: 5, fill: false };
-const SOURCE = { seoul: "서울", gyeonggi: "경기" };
+const SOURCE = { seoul: "서울", gyeonggi: "경기", incheon: "인천" };
 const kind = (r) => [SOURCE[r.source] || r.source, r.type].filter(Boolean).join(" "); // "경기 일반"
 // 칩 색 = 경로 결과 칩과 같은 유형 색(routes.js BUS_COLOR). 서울 마을버스는 실제 초록이라 원천을 아는 여기서만 지선 초록으로
 const routeColor = (r) => busColor(r.source === "seoul" && r.type === "마을" ? "지선" : r.type);

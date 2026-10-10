@@ -49,14 +49,16 @@ Leaflet 1.9.4 는 `web/frontend/vendor/leaflet-1.9.4/` 에 들어 있다. 빌드
 | `KAKAO_CAR_DAILY_LIMIT` | 선택, 기본 10000 | 자동차 일일 호출 한도 |
 | `KAKAO_KEYWORD_DAILY_LIMIT` | 선택, 기본 100000 | 키워드로 장소 검색 일일 호출 한도 |
 | `KAKAO_ADDRESS_DAILY_LIMIT` | 선택, 기본 100000 | 주소 검색 일일 호출 한도 |
-| `DATA_GO_KR_API_KEY` | 버스 실시간 도착 | 경기 GBIS · 서울 TOPIS 버스 도착정보 (두 원천이 같은 키를 쓴다) |
+| `DATA_GO_KR_API_KEY` | 버스 실시간 도착·인천 노선 | 경기 GBIS · 서울 TOPIS · 인천 버스 API (기존 키를 함께 쓴다) |
 | `SEOUL_SUBWAY_LIVE_API` | 도시철도 실시간 도착 | 서울 열린데이터광장 '실시간 지하철' (서울 밖도 된다. 용인에버라인·의정부경전철·김포골드라인·인천 1·2호선은 제공하지 않는다) |
 | `GYEONGGI_BUS_DAILY_LIMIT` | 선택, 기본 1000 | 경기 버스 도착정보 일일 호출 한도 |
 | `SEOUL_BUS_DAILY_LIMIT` | 선택, 기본 1000 | 서울 버스 도착정보 일일 호출 한도 |
+| `INCHEON_BUS_DAILY_LIMIT` | 선택, 기본 1000 | 인천 버스 도착정보 일일 호출 한도 |
+| `INCHEON_ROUTE_DAILY_LIMIT` | 선택, 기본 1000 | 인천 버스 노선정보 일일 호출 한도 |
 | `SEOUL_SUBWAY_DAILY_LIMIT` | 선택, 기본 1000 | 도시철도 실시간 도착 일일 호출 한도 |
 
 기본 한도는 카카오 무료 쿼터와 같다 — 넘기 전에 서버가 막으므로 초과 과금이 생기지 않는다.
-도착정보 세 원천의 기본 1000건/일은 공공데이터 개발계정 한도와 같다 (data.go.kr 은 활용신청이 승인되어야 응답한다).
+공공데이터 서비스별 기본 1000건/일은 개발계정 한도와 같다 (data.go.kr 은 활용신청이 승인되어야 응답한다).
 카카오맵 [사용 설정] 하나가 대중교통과 로컬 검색을 함께 연다.
 
 - `KEY ="value"` 형식도 읽는다. 이미 설정된 환경변수가 `.env` 보다 우선한다. `.env` 는 커밋하지 않는다(gitignore).
@@ -82,6 +84,13 @@ Leaflet 1.9.4 는 `web/frontend/vendor/leaflet-1.9.4/` 에 들어 있다. 빌드
 표 자체가 없어도 같은 기본값을 쓰며, `wait_source=default`와 화면의 **실제 배차 미반영 · 기본 대기 15분 적용** 표시로 알린다. 실제 대기 0초는 유지한다.
 정류소 CSV·노선 순서표·실시간 역 매핑표·배차간격 표나 `data/ref/line_groups.csv` 를 고친 뒤에는 서버를 다시 시작한다 (시작할 때 한 번 읽는다).
 
+인천 `ICB` 정류장은 기존 `/api/arrivals/stop/{stop_key}`로 조회한다. 서버가 `source_ids`의 원천 ID를 꺼내
+[인천 도착정보](https://www.data.go.kr/data/15059084/openapi.do)를 호출하며, 키는 기존 경기 방식처럼 디코딩 후 `serviceKey`로 전달한다.
+인천 응답은 XML이고 도착예정시간은 초 단위다. 노선 번호가 응답에 없으므로 로컬 순서표를 우선하고,
+없는 노선은 [인천 노선정보](https://www.data.go.kr/data/15058487/openapi.do)의 `getBusRouteId`로 보완한다(정적 정보 24시간 메모리 캐시).
+동일 노선의 중복 도착은 서울→경기→인천 순으로 유효 예측을 선택한다. 외부 오류는 빈 도착정보로 처리하지 않는다.
+현재 실제 인천 API는 `HTTP_ERROR(04)`여서 정상 응답 검증·인천 자체 노선 DB 수집은 대기 상태다.
+
 ## 4. 실행
 
 ```powershell
@@ -100,7 +109,7 @@ $env:PYTHONUTF8="1"
 | `GET /api/stops?bbox=minLon,minLat,maxLon,maxLat&kinds=bus,subway&virtual=0&limit=5000` | 범위 안 정류장·역 (`bus` 는 `bbox` 필수, `limit` 은 종류별 최대 10000, 넘치면 `truncated`) |
 | `GET /api/stops/{정류장키}/routes` | 버스 정류장을 지나는 노선 (미정차 제외, 이름 순). `data/processed/bus_route_stops.csv` 가 없으면 `data_not_built`(503) |
 | `GET /api/routes/{노선ID}` | 노선이 지나는 정류장 (운행 순서, 미정차 제외, 같은 정류장은 한 번) — 지도에서 정류장만 강조한다 |
-| `GET /api/boundaries` | 시군구 경계 GeoJSON (서울 25구 + 경기 31시·군) |
+| `GET /api/boundaries` | 시군구 경계 GeoJSON (서울 25구 + 인천 11군·구 + 경기 31시·군) |
 | `GET /api/transit?sx&sy&ex&ey&probe=0` | 대중교통 경로 + 승·하차 정류장 매칭 진단 + 대기시간(첫 승차는 실시간 도착정보, 나머지는 배차로 추정) (`probe=1` 은 응답 구조 요약 추가) |
 | `GET /api/car?sx&sy&ex&ey` | 자동차 경로·택시 요금 |
 | `GET /api/hybrid?sx&sy&ex&ey&top=10&t_max=30` | 대중교통+택시 연계 경로 (선호는 시간 중시로 고정 — 택시를 섞는 사람은 돈보다 시간이 급하다. 앵커 후보를 `algo` 가 만들고 상위 `top` 개만 카카오로 확인한다. **쿼터를 크게 쓴다** — 기준 경로 1콜 + 앵커마다 자동차 1콜, 대중교통은 A 유형과 (b) 역추적이 낸 B 유형에 1콜씩 더. 중간 공백을 메우는 D 는 자동차 1콜뿐. 돌아가는 구간에서 내리는 C 는 예산을 따로 둬 대중교통 최대 6 · 자동차 최대 8콜 — `top=10` 면 모두 합쳐 최대 35콜) |
@@ -185,3 +194,5 @@ $env:PYTHONUTF8="1"
 - Vercel 은 git 에서 빌드하므로 서버가 읽는 `data/processed/` 8개 파일은 저장소에 둔다(`.gitignore` 예외). 데이터를 다시 만들면 함께 커밋한다.
 - 키는 `.env` 대신 Vercel 프로젝트 환경 변수로 넣는다: `KAKAO_REST_API_KEY`, `VWORLD_API_KEY`, `DATA_GO_KR_API_KEY`, `SEOUL_SUBWAY_LIVE_API` (한도 변수는 선택).
 - **쿼터 카운트는 근사치다**: 함수는 `/tmp` 에만 쓸 수 있어(`VERCEL` 환경 변수가 있으면 `/tmp/baroga/quota.json`) 인스턴스마다 따로 세고 새로 뜨면 0 부터 센다. 실제 한도는 카카오가 막고(-10 → 그날 소진 처리), 정확한 공유 카운트가 필요하면 외부 저장소(예: Upstash Redis)로 옮겨야 한다.
+
+인천 정류장·역·행정경계는 로컬 데이터에 포함한다. 인천 자체 버스 노선·배차·실시간 API의 추가 수집/연동 상태는 [인천 확장 현황](../data/reports/incheon_scope.md)을 참고한다.

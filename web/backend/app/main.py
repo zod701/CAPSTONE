@@ -50,6 +50,8 @@ def create_app(settings: Settings | None = None, transport: httpx.AsyncBaseTrans
                                "keyword": settings.keyword_daily_limit, "address": settings.address_daily_limit,
                                "gyeonggi_bus": settings.gyeonggi_bus_daily_limit,
                                "seoul_bus": settings.seoul_bus_daily_limit,
+                               "incheon_bus": settings.incheon_bus_daily_limit,
+                               "incheon_route": settings.incheon_route_daily_limit,
                                "seoul_subway": settings.seoul_subway_daily_limit})
         try:
             st.stops = StopsDB.load(settings.processed_dir, settings.ref_dir)

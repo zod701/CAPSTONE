@@ -315,7 +315,7 @@ def _no_realtime(message):
                     action="배차 간격 표(data/processed/headway_rail.csv · headway_bus.csv)로 추정한 대기시간을 쓰세요.")
 
 
-BIS_SOURCE = {"GGB": "gyeonggi", "SEB": "seoul"}   # processed/bus_stops.csv 의 source_ids 접두어
+BIS_SOURCE = {"GGB": "gyeonggi", "SEB": "seoul", "ICB": "incheon"}   # processed/bus_stops.csv 의 source_ids 접두어
 
 
 FAR = 10**6   # 남은 역·정류소 수가 없는 항목을 맨 뒤로 보내는 값
@@ -346,7 +346,8 @@ async def arrivals_stop_payload(st, stop_key):
             calls.append((source, sid[3:]))
     if not calls:
         raise _no_realtime("이 정류장은 실시간 도착 정보를 제공하지 않습니다.")
-    fetch = {"gyeonggi": st.realtime.gyeonggi_stop, "seoul": st.realtime.seoul_stop}
+    fetch = {"gyeonggi": st.realtime.gyeonggi_stop, "seoul": st.realtime.seoul_stop,
+             "incheon": st.realtime.incheon_stop}
     got = await asyncio.gather(*(fetch[source](up_id) for source, up_id in calls), return_exceptions=True)
     for r in got:
         if isinstance(r, BaseException) and not isinstance(r, ApiError):
@@ -354,7 +355,22 @@ async def arrivals_stop_payload(st, stop_key):
     if all(isinstance(r, ApiError) for r in got):
         raise got[0]
     types = {r["id"]: r["type"] or None for r in st.routes.routes_at(stop_key)} if st.routes else {}
+    names = {it["route_id"]: st.routes.name_of(it["route_id"]) for rows in got if isinstance(rows, list)
+             for it in rows if it["route_id"]} if st.routes else {}
     items, failed = [], []
+    # 인천 도착 XML에는 노선 번호가 없다. 로컬 노선표를 우선하고 누락 노선만 노선 API로 보완한다.
+    missing = sorted({it["route_id"] for rows in got if isinstance(rows, list) for it in rows
+                      if it["source"] == "incheon" and it["route_id"] and not names.get(it["route_id"])})
+    for rid, result in zip(missing, await asyncio.gather(
+            *(st.realtime.incheon_route(rid) for rid in missing), return_exceptions=True)):
+        if isinstance(result, ApiError):
+            failed.append({"source": "incheon", "code": result.code, "message": result.message})
+        elif isinstance(result, BaseException):
+            raise result
+        else:
+            for route in result:
+                if route["id"] == rid:
+                    names[rid], types[rid] = route["name"], route["type"]
     headway_db = getattr(st, "headway", None)
     day = day_type(datetime.now(KST))
     for (source, _), r in zip(calls, got):
@@ -362,6 +378,8 @@ async def arrivals_stop_payload(st, stop_key):
             failed.append({"source": source, "code": r.code, "message": r.message})
             continue
         for it in r:
+            if not it["route_name"]:
+                it["route_name"] = names.get(it["route_id"])
             if it["route_type"] is None and it["route_id"]:
                 it["route_type"] = types.get(it["route_id"])   # 순서표의 카카오 유형 이름 (프론트 BUS_COLOR 키)
             it["headway_m"] = _route_headway(headway_db, it["route_id"], day) if headway_db and it["route_id"] else None
@@ -372,7 +390,7 @@ async def arrivals_stop_payload(st, stop_key):
 
 
 def _prefer_seoul_bus(items):
-    """동일 정류장·노선은 서울 우선. 예측이 없을 때만 경기의 유효한 정보를 쓴다."""
+    """동일 정류장·노선은 서울→경기→인천 순으로 유효한 예측을 선택한다."""
     routes = {}
     for index, item in enumerate(items):
         # 번호가 같은 다른 노선을 합치지 않는다. ID가 없는 항목도 서로 합치지 않는다.
@@ -385,16 +403,16 @@ def _prefer_seoul_bus(items):
 
     selected = []
     for sources in routes.values():
-        seoul, gyeonggi = sources.get("seoul", []), sources.get("gyeonggi", [])
+        choices = [sources[s] for s in ("seoul", "gyeonggi", "incheon") if sources.get(s)]
         # 첫 차·다음 차를 한 원천에서 선택해 동일 차량의 중복·순서 혼합을 막는다.
-        selected.extend(seoul if usable(seoul) else gyeonggi if usable(gyeonggi) else seoul or gyeonggi)
+        selected.extend(next((rows for rows in choices if usable(rows)), choices[0]))
     return selected
 
 
 @router.get("/arrivals/stop/{stop_key}")
 async def arrivals_stop(request: Request, stop_key: str):
     """버스 정류장 실시간 도착. 그 정류장을 등록한 BIS 전부를 동시에 부르고 합친다
-    (노선별 서울 우선, 서울 예측이 없으면 경기로 보완. 실패는 failed 에 기록)."""
+    (노선별 서울→경기→인천 순으로 유효 예측을 선택. 실패는 failed 에 기록)."""
     st = request.app.state
     out = await arrivals_stop_payload(st, stop_key)
     out["quota"] = st.quota.snapshot()

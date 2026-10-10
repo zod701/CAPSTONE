@@ -7,7 +7,7 @@ from build_subway_seq import (_tok, apply_fixes, build, components, edges, gtxa_
 
 LINE_MAP = pd.DataFrame([("가선", "ga", "가"), ("나선", "na", "나"), ("가지선", "gaji", "가"), ("GTX-A", "gtxa", "GTX-A")],
                         columns=["raw_line_name", "line_id", "line_group"], dtype=str)
-SEOUL, INCHEON = "서울특별시 중구 어딘가 1", "인천광역시 중구 어딘가 1"
+SEOUL, OUTSIDE = "서울특별시 중구 어딘가 1", "부산광역시 중구 어딘가 1"
 
 
 def _db(*rows):
@@ -122,7 +122,7 @@ DB = _db(("ga-1", "가", "가선", "가", "126.90", "37.50"), ("ga-2", "나루�
          ("ga-3", "다", "가선", "가", "126.92", "37.50"), ("na-1", "라", "나선", "나", "126.925", "37.50"),
          ("na-2", "다", "나선", "나", "126.9201", "37.5001"), ("na-9", "마", "나선", "나", "128.50", "36.00"),
          ("ga-9", "외딴역", "가선", "가", "127.30", "37.30"))
-RAW = _raw(("바깥", INCHEON), ("양원", SEOUL), ("마", SEOUL))
+RAW = _raw(("바깥", OUTSIDE), ("양원", SEOUL), ("마", SEOUL))
 
 
 def test_build_resolution_order_drop_missing_and_phys():
@@ -135,7 +135,7 @@ def test_build_resolution_order_drop_missing_and_phys():
         [4, "na-1", "라", "db", "added"],         # 가선에 없는 역 → 이웃 8 km 안의 다른 노선 역
         [5, "", "마", "missing", "comp"],         # 같은 이름 na-9 는 200 km 밖 (동명이역) → 원천 주소가 서울 → 이름만
         [6, "", "양원", "missing", "comp"],       # 역 DB 에 없고 원천 주소가 서울 (좌표 결함)
-    ]                                             # 바깥(인천)은 끝에서 뺐다
+    ]                                             # 바깥(부산)은 끝에서 뺐다
     assert info["dropped"] == {"ga": ["바깥"]} and info["interior"] == []
     assert info["how"] == {"line": 3, "other": 1, "missing": 2}
     # 같은 이름 + 300 m 안 = 한 물리 역: 가선 다(ga-3)와 나선 다(na-2) → 대표 id 는 둘 중 작은 것
