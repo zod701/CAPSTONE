@@ -1,4 +1,4 @@
-"""앵커 후보 생성 (b) 직행 노선 역추적 — 인라인 합성 DB 만 쓴다.
+"""직행 노선 끝점 (`anchors.direct_ends`) — 인라인 합성 DB 만 쓴다.
 
 좌표는 기준점에서 미터로 옮겨 배치한다 — 반경·거리 조건이 테스트에서 그대로 읽힌다.
 """
@@ -13,7 +13,7 @@ from app.linesdb import LinesDB
 from app.routesdb import RoutesDB
 from app.stopsdb import StopsDB
 
-from algo.anchors import RAIL_KMH, _chain_km, propose_backtrack, propose_perturb, taxi_fare, top_n, transit_fare
+from algo.anchors import RAIL_KMH, _chain_km, direct_ends, transit_fare
 
 
 def move(pt, east_m, north_m):
@@ -67,9 +67,11 @@ def hbus(rid, lo, hi, day="평일"):
 
 
 def run(bus=(), sub=(), routes=(), lines=(), hw=None, **kw):
+    """기본은 택시에서 내려 타는 쪽(tail) — O 쪽 택시 반경에서 타고 D 근처에서 내린다."""
     kw.setdefault("at", DAY)
-    return propose_backtrack(StopsDB(bus, sub, LINE_GROUPS), RoutesDB(routes), LinesDB(lines),
-                             O, D, vot=300.0, headway=hw, **kw)
+    kw.setdefault("side", "tail")
+    return direct_ends(StopsDB(bus, sub, LINE_GROUPS), RoutesDB(routes), LinesDB(lines),
+                       O, D, vot=300.0, headway=hw, **kw)
 
 
 # --- 버스 ---
@@ -79,7 +81,7 @@ def test_direct_route_becomes_one_anchor():
     cands, diag = run(bus=[bstop("p", P), bstop("q", Q)],
                       routes=[rrow("r1", 1, "p", P), rrow("r1", 2, "q", Q)])
     assert [(c["anchor"], c["kind"], c["ride_id"]) for c in cands] == [("p", "bus", "r1")]
-    assert (diag["bus_pairs"], diag["anchors"]) == (1, 1)
+    assert (diag["bus_pairs"], diag["ends"]) == (1, 1)
 
 
 def test_reverse_direction_is_dropped():
@@ -224,130 +226,45 @@ def test_night_route_crossing_midnight_runs_late():
     assert run(at=datetime(2026, 9, 11, 3, 0), **args)[0] == []
 
 
-# --- 상위 N ---
-
-def test_top_n_spreads_across_routes():
-    # 한 노선이 여러 정류소를 지나도 상위가 그 노선으로만 채워지지 않는다
-    cands = [{"ride_id": "r1", "score_s": 1}, {"ride_id": "r1", "score_s": 2},
-             {"ride_id": "r1", "score_s": 3}, {"ride_id": "r2", "score_s": 4}]
-    assert [c["score_s"] for c in top_n(cands, 3, max_per_route=2)] == [1, 2, 4]
-
-
-# --- (a) 기준 경로 섭동 ---
-
-def chosen(sid, pt, sgg="수원시"):
-    return {"id": sid, "name": sid, "lon": pt[0], "lat": pt[1], "sgg_nm": sgg, "line_group": None}
-
-
-def ride_step(board, alight, time_s=600, vehicle="11", kind="BUS"):
-    return {"idx": 0, "type": kind, "time_s": time_s, "distance_m": 1000, "vehicles": [{"name": vehicle}],
-            "stops": [], "path": [], "resolution": {"board": {"chosen": board}, "alight": {"chosen": alight}}}
-
-
-def base_route(steps, fare=1500):
-    return {"idx": 0, "total_time_s": sum(s["time_s"] for s in steps), "transfers": 0,
-            "fare": {"value": fare, "min": None, "max": None}, "steps": steps}
-
-
-def test_perturb_makes_first_and_last_mile_candidates():
-    # 한 승차 구간에서 앞을 택시로 바꾸면 A, 뒤를 바꾸면 B 가 나온다
-    route = base_route([ride_step(chosen("p", P), chosen("q", QF))])
-    cands, diag = propose_perturb(O, D, [route], vot=300.0, at=DAY)
-    assert sorted(c["hybrid"] for c in cands) == ["A", "B"]
-    assert {c["anchor"] for c in cands} == {"p", "q"} and diag["pairs"] == 2
-
-
-@pytest.mark.parametrize("hybrid", ["A", "B"])
-@pytest.mark.parametrize("waits,expected", [((0, 0), 0), ((120, 180), 300),
-                                            ((None, 120), 1020), ((120, None), 1020)])
-def test_perturb_wait_sum_uses_defaults_for_unknown_rides(hybrid, waits, expected):
-    first = dict(ride_step(chosen("p", P), chosen("m", P2)), wait_s=waits[0])
-    last = dict(ride_step(chosen("m", P2), chosen("q", QF)), wait_s=waits[1])
-    route = base_route([first, walk_step(60), last])
-    cands, _ = propose_perturb(O, D, [route], vot=300, hybrids=(hybrid,), at=DAY)
-    edge = 0 if hybrid == "A" else 2
-    candidate = next(c for c in cands if c["step_index"] == edge)
-    assert candidate["wait_s"] == expected
-
-
-@pytest.mark.parametrize("hybrid", ["A", "B"])
-def test_perturb_zero_wait_is_better_than_one_second(hybrid):
-    scores = []
-    for wait in (0, 1):
-        route = base_route([dict(ride_step(chosen("p", P), chosen("q", QF)), wait_s=wait)])
-        candidates, _ = propose_perturb(O, D, [route], vot=300, hybrids=(hybrid,), at=DAY)
-        candidate, = candidates
-        scores.append(candidate["score_s"])
-    assert scores[1] - scores[0] == pytest.approx(1)
-
-
-def test_perturb_skips_anchor_beyond_taxi_reach():
-    # 택시로 T_max 안에 닿지 않는 지점은 앵커가 아니다
-    route = base_route([ride_step(chosen("far", FAR), chosen("q", QF))])
-    cands, diag = propose_perturb(O, D, [route], vot=300.0, at=DAY)
-    assert [c["hybrid"] for c in cands] == ["B"] and diag["too_far"] == 1
-
-
-def test_perturb_needs_grounded_stop():
-    # 접지가 승·하차를 정하지 못한 구간은 앵커를 만들 수 없다
-    route = base_route([ride_step(None, None)])
-    cands, diag = propose_perturb(O, D, [route], vot=300.0, at=DAY)
-    assert (cands, diag["no_anchor"]) == ([], 2)
-
-
-def test_perturb_carries_fare_cap():
-    # 잘라낸 경로의 요금은 알 수 없다 — 기준 경로 요금을 상한으로 들고 간다
-    route = base_route([ride_step(chosen("p", P), chosen("q", QF))], fare=2350)
-    cands, _ = propose_perturb(O, D, [route], vot=300.0, at=DAY)
-    assert {c["transit_fare_cap"] for c in cands} == {2350}
-
-
-# --- 대칭판: B 유형 (걸어서 타고 하차 지점에서 택시) ---
+# --- 대칭판: 걸어서 타는 쪽(head) — 하차 지점이 끝점 ---
 
 PB = move(O, 300, 0)       # 출발지에서 걸어갈 수 있는 승차 후보
 QB = move(D, 3000, 0)      # 목적지에서 택시로만 닿는 하차 후보
 
 
 def test_symmetric_direction_anchors_on_the_alighting_stop():
-    # B 는 걸어서 타고 하차 지점에서 택시로 마무리한다 — 앵커가 하차 지점이고 승차 지점은 따로 들고 간다
+    # 걸어서 타는 쪽은 하차 지점에서 택시를 탄다 — 끝점이 하차 지점이고 승차 지점은 따로 들고 간다
     cands, diag = run(bus=[bstop("pb", PB), bstop("qb", QB)],
-                      routes=[rrow("r1", 1, "pb", PB), rrow("r1", 2, "qb", QB)], hybrid="B")
-    assert [(c["anchor"], c["hybrid"], c["board"]) for c in cands] == [("qb", "B", "pb")]
-    assert diag["hybrid"] == "B"
+                      routes=[rrow("r1", 1, "pb", PB), rrow("r1", 2, "qb", QB)], side="head")
+    assert [(c["anchor"], c["board"]) for c in cands] == [("qb", "pb")]
+    assert diag["side"] == "head"
 
 
 def test_direction_decides_which_end_gets_the_taxi():
     # 같은 노선·같은 정류소라도 어느 쪽 끝에 택시를 두느냐로 성립 여부가 갈린다
     args = dict(bus=[bstop("pb", PB), bstop("qb", QB)],
                 routes=[rrow("r1", 1, "pb", PB), rrow("r1", 2, "qb", QB)])
-    assert run(hybrid="A", **args)[0] == []          # D 에서 3 km 떨어진 하차점은 도보권 밖이다
-    assert len(run(hybrid="B", **args)[0]) == 1      # 택시로는 닿는다
+    assert run(side="tail", **args)[0] == []         # D 에서 3 km 떨어진 하차점은 도보권 밖이다
+    assert len(run(side="head", **args)[0]) == 1     # 택시로는 닿는다
 
 
-def test_b_wait_counts_only_routes_from_the_same_boarding_stop():
+def test_head_wait_counts_only_routes_from_the_same_boarding_stop():
     # 한 하차 지점으로 오는 노선이라도 타는 곳이 다르면 함께 기다릴 수 없다 — 빈도를 더하지 않는다
     p2 = move(O, 300, 200)
     cands, _ = run(bus=[bstop("p1", PB), bstop("p2", p2), bstop("qb", QB)],
                    routes=[rrow("r1", 1, "p1", PB, name="11"), rrow("r1", 2, "qb", QB, name="11"),
                            rrow("r2", 1, "p2", p2, name="22"), rrow("r2", 2, "qb", QB, name="22")],
-                   hw=HeadwayDB([hbus("r1", 10, 10), hbus("r2", 10, 10)]), hybrid="B")
+                   hw=HeadwayDB([hbus("r1", 10, 10), hbus("r2", 10, 10)]), side="head")
     assert len(cands) == 1 and cands[0]["headway_m"] == pytest.approx(10.0)
 
 
-def test_b_wait_adds_frequencies_at_the_same_boarding_stop():
-    # 같은 곳에서 타는 노선이 둘이면 B 에서도 빈도를 더한다 — 10분·15분이면 6분
+def test_head_wait_adds_frequencies_at_the_same_boarding_stop():
+    # 같은 곳에서 타는 노선이 둘이면 걸어서 타는 쪽에서도 빈도를 더한다 — 10분·15분이면 6분
     cands, _ = run(bus=[bstop("pb", PB), bstop("qb", QB)],
                    routes=[rrow("r1", 1, "pb", PB, name="11"), rrow("r1", 2, "qb", QB, name="11"),
                            rrow("r2", 1, "pb", PB, name="22"), rrow("r2", 2, "qb", QB, name="22")],
-                   hw=HeadwayDB([hbus("r1", 10, 10), hbus("r2", 15, 15)]), hybrid="B")
+                   hw=HeadwayDB([hbus("r1", 10, 10), hbus("r2", 15, 15)]), side="head")
     assert cands[0]["headway_m"] == pytest.approx(6.0)
-
-
-def test_b_fare_is_charged_from_the_anchor_city():
-    # B 는 하차 지점에서 택시를 탄다 — 요금 유형·심야는 그곳 기준이다 (가평군 = 나형)
-    got = run(bus=[bstop("pb", PB, sgg="수원시"), bstop("qb", QB, sgg="가평군")],
-              routes=[rrow("r1", 1, "pb", PB), rrow("r1", 2, "qb", QB)], hybrid="B")[0][0]
-    assert got["fare"] == pytest.approx(taxi_fare(got["taxi_km"], "가평군", "가평군", DAY))
 
 
 # --- 대중교통 요금 축 ---
@@ -365,116 +282,11 @@ def test_cheap_route_type_wins_when_fare_dominates():
     cands, _ = run(bus=[bstop("pb", PB), bstop("qs", qs)],
                    routes=[rrow("air", 1, "pb", PB, rtype="공항"), rrow("air", 2, "qs", qs, rtype="공항"),
                            rrow("loc", 1, "pb", PB, rtype="일반"), rrow("loc", 2, "qs", qs, rtype="일반")],
-                   hybrid="B")
+                   side="head")
     assert len(cands) == 1 and cands[0]["ride_id"] == "loc"
 
 
-# --- (a) 의 D: 공백 메우기 ---
-from algo.anchors import GAP_MIN_S, TAXI_BASE_S, TAXI_BUFFER_S, TAXI_PICKUP_S, propose_gap   # noqa: E402
-
-M1, M2, M3 = move(O, 0, 3000), move(O, 1500, 3000), move(O, 0, 6000)   # 환승 도보 M1 → M2 는 1.5 km
-
-
-def walk_step(time_s):
-    return {"idx": 0, "type": "WALKING", "time_s": time_s, "distance_m": 300, "vehicles": [], "stops": [], "path": []}
-
-
-def gap_route(wait1=120, walk_mid=120, wait2=120, wait3=120):
-    """P →(11) M1 · 환승 도보 · M2 →(22) M3 · M3 →(33) Q 인 세 구간 경로 — 대기는 구간마다 따로 준다."""
-    r1 = dict(ride_step(chosen("p", P), chosen("m1", M1), vehicle="11"), wait_s=wait1)
-    r2 = dict(ride_step(chosen("m2", M2), chosen("m3", M3), vehicle="22"), wait_s=wait2)
-    r3 = dict(ride_step(chosen("m3b", M3), chosen("q", Q), vehicle="33"), wait_s=wait3)
-    for r in (r1, r2, r3):
-        name = r["vehicles"][0]["name"]
-        r["fare_routes"] = [{"id": name, "name": name, "source": "gyeonggi", "type": "일반"}]
-    route = base_route([r1, walk_step(walk_mid), r2, r3])
-    route["wait_s"] = sum(w for w in (wait1, wait2, wait3) if w is not None) if None not in (wait1, wait2, wait3) else None
-    return route
-
-
-def test_gap_floor_is_taxi_fixed_cost_plus_buffer():
-    # 거리 0 인 택시도 호출 대기·고정 비용·연결 버퍼만큼은 든다 — 이보다 짧은 공백은 메워도 이득이 없다
-    assert GAP_MIN_S == TAXI_PICKUP_S + TAXI_BASE_S + TAXI_BUFFER_S
-
-
-def test_long_wait_in_the_middle_becomes_a_gap_candidate():
-    # 가운데 구간(22)의 대기가 15분이면 그 정류장에서 택시로 하차 지점까지 간다 — 뒤에 탈 차(33)가 남아 있다
-    cands, diag = propose_gap(O, D, [gap_route(wait2=900)], vot=300.0, at=DAY)
-    assert [(c["anchor"], c["gap"], c["resume_ride"]) for c in cands] == [("m2>m3", "wait", True)]
-    assert cands[0]["gap_s"] == 900 + 600 and diag["gaps_wait"] == 1
-
-
-def test_gap_preserves_zero_remaining_wait():
-    candidates, _ = propose_gap(O, D, [gap_route(wait1=0, wait2=900, wait3=0)], vot=300, at=DAY)
-    candidate, = candidates
-    assert candidate["wait_s"] == 0
-
-
-def test_short_gaps_make_no_candidate():
-    # 대기·도보가 모두 짧으면 메울 공백이 없다
-    cands, diag = propose_gap(O, D, [gap_route()], vot=300.0, at=DAY)
-    assert (cands, diag["below_min"]) == ([], 4)
-
-
-def test_long_transfer_walk_is_filled():
-    # 1.5 km 환승 도보가 20분이면 앞 하차 지점에서 뒤 승차 지점까지 택시로 간다
-    cands, _ = propose_gap(O, D, [gap_route(walk_mid=1200)], vot=300.0, at=DAY)
-    assert [(c["anchor"], c["gap"]) for c in cands] == [("m1>m2", "walk")]
-
-
-def test_last_leg_gap_does_not_need_a_connection_buffer():
-    # 마지막 구간을 택시로 메우면 내려서 탈 차가 없다 — 검증에서 연결 버퍼를 씌우지 않는다
-    # M3 → Q 는 직선 4 km(택시 약 16분) — 상한을 20분으로 명시하고 버퍼 판정만 본다
-    cands, _ = propose_gap(O, D, [gap_route(wait3=900)], vot=300.0, at=DAY, t_max_s=20 * 60)
-    assert [(c["anchor"], c["resume_ride"]) for c in cands] == [("m3b>q", False)]
-
-
-def test_route_with_unknown_wait_is_skipped():
-    # 대기를 모르는 구간이 있으면 기준 시간의 대기 합이 없어 무엇을 빼는지 정의되지 않는다
-    cands, diag = propose_gap(O, D, [gap_route(wait1=None, wait2=900)], vot=300.0, at=DAY)
-    assert (cands, diag["route_wait_unknown"]) == ([], 1)
-
-
-def test_gap_time_is_baseline_minus_gap_plus_taxi():
-    # 남은 구간(차내·대기·끝 도보)과 택시를 더하면 기준 시간에서 공백을 빼고 택시를 더한 값과 같다
-    c = propose_gap(O, D, [gap_route(wait2=900)], vot=300.0, at=DAY)[0][0]
-    assert c["ride_s"] + c["wait_s"] + c["walk_s"] == pytest.approx(c["base_time_s"] - c["gap_s"])
-
-
-# --- 검증할 후보 고르기 ---
-from algo.anchors import merge_candidates   # noqa: E402
-
-
-def cand_at(hybrid, anchor, pt, score, frm=None):
-    c = {"hybrid": hybrid, "anchor": anchor, "lon": pt[0], "lat": pt[1], "score_s": score}
-    if frm is not None:
-        c["from_lon"], c["from_lat"] = frm
-    return c
-
-
-def test_merge_folds_near_anchors_of_the_same_type():
-    # 환승역의 노선별 두 id(50 m 떨어짐)는 같은 검증 쿼리다 — 점수가 낮은 쪽 하나만 남는다
-    picks = merge_candidates([cand_at("A", "4호선-오이도", P, 10)], [cand_at("A", "수인-오이도", move(P, 50, 0), 12)], top=5)
-    assert [c["anchor"] for c in picks] == ["4호선-오이도"]
-
-
-def test_merge_keeps_different_types_at_the_same_spot():
-    # 같은 정류소라도 A(택시로 타러 감)와 B(내려서 택시)는 다른 쿼리다
-    picks = merge_candidates([cand_at("A", "s", P, 10)], [cand_at("B", "s", P, 12)], top=5)
-    assert [c["hybrid"] for c in picks] == ["A", "B"]
-
-
-def test_merge_compares_both_ends_for_gap_candidates():
-    # D 는 택시 양끝이 모두 앵커다 — 도착점이 같아도 출발점이 멀면 다른 공백이라 둘 다 남는다
-    far_from = move(M2, 0, -2000)
-    picks = merge_candidates([cand_at("D", "m2>m3", M3, 10, frm=M2)],
-                             [cand_at("D", "x>m3", move(M3, 30, 0), 12, frm=far_from),
-                              cand_at("D", "m2b>m3b", move(M3, 30, 0), 14, frm=move(M2, 40, 0))], top=5)
-    assert [c["anchor"] for c in picks] == ["m2>m3", "x>m3"]
-
-
-# --- D: 환승 인정 시간 ---
-from algo.anchors import taxi_connect_s   # noqa: E402
+# --- 환승 인정 시간 ---
 from algo.fares import TRANSFER_WINDOW_NIGHT_S, TRANSFER_WINDOW_S, transfer_window_s   # noqa: E402
 
 
@@ -484,49 +296,6 @@ def test_transfer_window_depends_on_the_boarding_time():
             transfer_window_s(datetime(2026, 9, 15, 6, 59)), transfer_window_s(datetime(2026, 9, 15, 7, 0)),
             transfer_window_s(None)) == (TRANSFER_WINDOW_S, TRANSFER_WINDOW_NIGHT_S, TRANSFER_WINDOW_NIGHT_S,
                                          TRANSFER_WINDOW_S, TRANSFER_WINDOW_S)
-
-
-def test_short_taxi_keeps_the_transfer():
-    # 환승 도보 2분 + 택시(버퍼 포함) + 다음 차 대기 2분이 30분 안이면 요금은 기준 경로 그대로다
-    c = propose_gap(O, D, [gap_route(wait2=900)], vot=300.0, at=DAY)[0][0]
-    assert c["link_s"] == 120 + 120
-    assert (c["transfer_kept"], c["transit_fare"]) == (True, 1650)
-    assert c["link_s"] + taxi_connect_s(c["taxi_s"]) <= TRANSFER_WINDOW_S
-
-
-def test_long_wait_for_the_next_ride_breaks_the_transfer_by_day_only():
-    # 택시에서 내려 다음 차(33)를 15분 기다리면 낮에는 30분을 넘겨 기본요금을 새로 내지만, 밤에는 60분 안이다
-    route = gap_route(wait2=900, wait3=900)
-    by_day = next(c for c in propose_gap(O, D, [route], vot=300.0, at=DAY)[0] if c["anchor"] == "m2>m3")
-    at_night = next(c for c in propose_gap(O, D, [route], vot=300.0, at=datetime(2026, 9, 14, 22, 0))[0]
-                    if c["anchor"] == "m2>m3")
-    assert (by_day["transfer_kept"], by_day["transit_fare"]) == (False, 3300)
-    assert (at_night["transfer_kept"], at_night["transit_fare"]) == (True, 1650)
-
-
-def test_first_leg_gap_has_no_transfer_to_keep():
-    # 첫 구간을 메우면 앞에 탄 차가 없다
-    cands, _ = propose_gap(O, D, [gap_route(wait1=900)], vot=300.0, at=DAY)
-    c = next(c for c in cands if c["anchor"] == "p>m1")
-    assert (c["transfer_kept"], c["transit_fare"]) == (None, 1650)
-
-
-# --- 택시를 쓰는 최소 기준 ---
-from algo.anchors import TAXI_MIN_M   # noqa: E402
-
-
-def test_backtrack_excludes_short_taxi_connection():
-    # 출발지에서 800 m 떨어진 승차 지점까지 택시를 타지는 않는다 — 기본거리도 안 되는 거리다
-    near = move(O, 800, 0)
-    cands, diag = run(bus=[bstop("n", near), bstop("q", Q)],
-                      routes=[rrow("r1", 1, "n", near), rrow("r1", 2, "q", Q)])
-    assert cands == [] and diag["too_close"] == 1
-
-
-def test_gap_skips_taxi_that_saves_too_little():
-    # 공백은 하한을 넘었지만(8분 대기) 택시 구간을 빼면 5분도 못 줄인다 — 후보로 두지 않는다
-    cands, diag = propose_gap(O, D, [gap_route(wait2=480)], vot=300.0, at=DAY)
-    assert (cands, diag["saves_little"]) == ([], 1)
 
 
 # --- 후보로 쓰지 않는 노선 유형 ---

@@ -694,15 +694,14 @@ export function clearTransit() {
 // --- 택시 ---
 
 // fit: 택시 경로와 지도에 켜진 대중교통 경로가 함께 보이게 맞춘다
-export function drawCar(car, { fit = false, walking = false } = {}) {
+export function drawCar(car, { fit = false } = {}) {
   const g = v.carGroup;
   const renderer = v.renderers.car;
   g.clearLayers();
   if (car?.path?.length >= 2) {
     const latlngs = car.path.map(ll);
-    if (!walking) L.polyline(latlngs, { color: "#000000", weight: 7, opacity: 0.85, renderer, interactive: false }).addTo(g);
-    L.polyline(latlngs, { color: walking ? COLOR.WALKING : COLOR.TAXI, weight: 4,
-      dashArray: walking ? "6 6" : null, opacity: 1, renderer, interactive: false }).addTo(g);
+    L.polyline(latlngs, { color: "#000000", weight: 7, opacity: 0.85, renderer, interactive: false }).addTo(g);
+    L.polyline(latlngs, { color: COLOR.TAXI, weight: 4, opacity: 1, renderer, interactive: false }).addTo(g);
     if (fit) v.map.fitBounds(extendWith(L.latLngBounds(latlngs), v.transitGroup), FIT);
   }
   syncAttribution();

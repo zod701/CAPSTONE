@@ -8,7 +8,6 @@ from itertools import product
 from datetime import timedelta
 
 from app.wait import DEFAULT_WAIT_S
-from geoutil import haversine_m
 
 
 RAIL_LINES = {f"{n}호선" for n in range(1, 10)} | {
@@ -32,10 +31,6 @@ BUS_RULES = {
                  "직행": (3200, 30000, "flat", 400), "광역": (3200, 30000, "bus", 400),
                  "순환": (3450, 30000, "bus", 400)},
 }
-
-
-def _chosen(step, role):
-    return ((step.get("resolution") or {}).get(role) or {}).get("chosen") or {}
 
 
 def _leg(step):
@@ -171,37 +166,3 @@ def _estimate(steps, fallback, *, at=None, initial_walk_s=0):
         reason += " · 택시 별도 결제와 대중교통 환승 유지 가정"
     return {"value": sum(groups) + paid, "source": "rules_estimate", "reason": reason,
             "transfer_kept": taxi_kept}
-
-
-def candidate_fare(cand, taxi_plan_s, *, tail=None, at=None):
-    """후보 생성·CLI·웹 검증이 함께 쓰는 대중교통 요금. C의 tail은 API 경로로 교체한다."""
-    fallback = cand.get("transit_fare_cap") or 0
-    if cand.get("via") == "reanchor":
-        tail_fare = cand.get("tail_fare")
-        if tail is not None:
-            fare = tail.get("fare") or {}
-            tail_fare = fare.get("value") if fare.get("value") is not None else fare.get("min")
-        fallback += tail_fare or 0
-    if "fare_steps" not in cand:
-        return {"value": fallback, "source": "fallback", "reason": "요금 계산용 구간 정보 없음"}
-    steps = []
-    for step in cand["fare_steps"]:
-        steps.append({**step, "time_s": taxi_plan_s, "connection": True,
-                      "type": "WALKING" if cand.get("link_mode") == "WALKING" else "TAXI"}
-                     if step["type"] == "TAXI" else step)
-    if tail is not None:
-        steps = steps[:next(i for i, s in enumerate(steps) if s.get("connection") or s["type"] == "TAXI") + 1]
-        first = next((s for s in tail["steps"] if s["type"] in ("BUS", "SUBWAY")), None)
-        board = _chosen(first, "board") if first else None
-        if board and "lon" in cand and "lat" in cand:
-            from algo.anchors import walk_s  # 실행 시 불러 후보 시간과 같은 도보 계수를 쓴다.
-            walk = walk_s(haversine_m(cand["lon"], cand["lat"], board["lon"], board["lat"]))
-            steps.append({"type": "WALKING", "time_s": walk})
-        steps.extend(tail["steps"])
-    result = estimate(steps, fallback, at=at, initial_walk_s=cand.get("fare_initial_walk_s", 0))
-    if result["source"] == "fallback" and cand.get("hybrid") == "D":
-        # 정보가 없으면 할인은 확정하지 않는다. 남은 앞·뒤 경로를 각각 계산/대체한다.
-        cut = next(i for i, s in enumerate(steps) if s.get("connection") or s["type"] == "TAXI")
-        result["value"] = sum(_estimate(part, fallback)["value"] for part in (steps[:cut], steps[cut + 1:]))
-        result["reason"] += " · 연결 앞뒤 할인 미적용 대체값"
-    return result

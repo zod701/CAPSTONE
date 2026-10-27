@@ -8,7 +8,7 @@ const names = ['selectRoute', 'selectHybrid', 'dropHybrid', 'toggleCar'];
 const source = names.map(name => app.match(new RegExp(`function ${name}\\([^]*?\\n\\}`))[0]).join('\n');
 
 test('taxi, transit and hybrid selections replace each other on cards and map', () => {
-  const state = { transit: { routes: [{}] }, hybrid: { routes: [{ anchor: {}, taxi: {}, transit: {} }] }, car: {}, carOn: false };
+  const state = { transit: { routes: [{}] }, hybrid: { routes: [{ taxi_at: 1, from: { lat: 37, lon: 127 }, to: { lat: 37, lon: 127.1 }, taxi: {}, transit: { steps: [{}, {}] } }] }, car: {}, carOn: false };
   let key = null, taxiSelected = false, transitDrawn = false, taxiDrawn = false;
   const context = vm.createContext({ state, $: id => id, revealSelectedCard() {},
     hybridDebug: { hideMap() {} },

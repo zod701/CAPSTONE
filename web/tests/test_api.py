@@ -462,7 +462,7 @@ HYB_OD = {"sx": 127.1195, "sy": 37.3645, "ex": 127.1123, "ey": 37.3948}
 
 def test_hybrid_plan(tmp_path, up):
     with serve(make_settings(tmp_path), up) as c:
-        r = c.get("/api/hybrid", params={**HYB_OD, "top": 2})
+        r = c.get("/api/hybrid", params=HYB_OD)
     assert r.status_code == 200, r.text
     assert r.headers["cache-control"] == "no-store"
     body = r.json()
@@ -472,9 +472,11 @@ def test_hybrid_plan(tmp_path, up):
     assert "comparisons" not in body
     base = body["baseline"]
     assert base["label"] == "최소 시간 경로" and base["time_s"] > 0 and base["route"]["steps"]
-    assert body["diag"]["picked"] <= 2 and body["diag"]["verified"] <= body["diag"]["picked"]
+    from app.hybrid import SEARCH_BUDGET
+    assert body["diag"]["search"]["queries"] <= SEARCH_BUDGET
+    assert body["diag"]["verified"] <= body["diag"]["picked"] <= body["diag"]["search"]["candidates"]
     for row in body["routes"]:
-        assert row["hybrid"] in ("A", "B")
+        assert row["hybrid"] in ("A", "B", "C", "D")
         assert row["anchor"]["name"] and row["anchor"]["lat"] and row["anchor"]["lon"]
         assert row["time_s"] > 0 and row["fare"] >= 0 and (row["walking"] or row["taxi"])["path"]
         assert isinstance(row["pareto"], bool) and isinstance(row["recommended"], bool)
@@ -491,7 +493,7 @@ def test_hybrid_plan(tmp_path, up):
 def test_hybrid_developer_trace_is_opt_in_and_does_not_add_api_calls(tmp_path, up, reuse):
     with serve(make_settings(tmp_path), up) as c:
         routes = c.get("/api/transit", params=HYB_OD).json()["routes"] if reuse else None
-        params = {**HYB_OD, "top": 2}
+        params = HYB_OD
         def request(debug):
             query = {**params, "debug": debug}
             return (c.post("/api/hybrid", params=query, json={"routes": routes}) if reuse
@@ -510,67 +512,51 @@ def test_hybrid_developer_trace_is_opt_in_and_does_not_add_api_calls(tmp_path, u
     assert trace["total"] >= debug["diag"]["picked"]
     assert trace["stages"][-1]["remaining"] == len(debug["routes"])
     assert all(any(item["id"] == row["trace_id"] for item in trace["candidates"]) for row in debug["routes"])
-    assert trace["stages"][4]["removed"] == debug["diag"]["too_little_saving"]
-    assert all(c["mode"] != "WALKING" for c in trace["candidates"])
+    from app.hybrid_trace import STAGES
+    assert trace["stages"][STAGES.index("시간 절약 검사")]["removed"] == debug["diag"]["too_little_saving"]
     no_keys(traced.text)
 
 
-def test_hybrid_asks_for_both_taxi_directions(tmp_path, up, monkeypatch):
-    """(b) 역추적을 first-mile(A)·last-mile(B) 두 방향으로 돌린다 — (a) 섭동이 내는 B 와는 다른 후보다."""
+def test_hybrid_builds_both_line_sides_and_pairs_them(tmp_path, up, monkeypatch):
+    """직행 노선 끝점은 두 쪽(걸어서 타는 head · 택시에서 내려 타는 tail)을 모두 만들고, 모든 앞·뒤 부분을 짝짓는다."""
     from algo import anchors
     seen = []
-    real = anchors.propose_backtrack
+    real = anchors.direct_ends
 
     def spy(*args, **kw):
-        seen.append(kw.get("hybrid", "A"))
+        seen.append(kw["side"])
         return real(*args, **kw)
 
-    merged = []
-    real_merge = anchors.merge_candidates
-
-    def merge_spy(*groups, top, **kw):
-        merged.append(len(groups))
-        return real_merge(*groups, top=top, **kw)
-
-    monkeypatch.setattr(anchors, "propose_backtrack", spy)
-    monkeypatch.setattr(anchors, "merge_candidates", merge_spy)
+    monkeypatch.setattr(anchors, "direct_ends", spy)
     with serve(make_settings(tmp_path), up) as c:
-        body = c.get("/api/hybrid", params={**HYB_OD, "top": 2}).json()
-    assert sorted(seen[:2]) == ["A", "B"]   # 그 뒤로는 C 가 돌아가는 정류장마다 A 방향으로 다시 부를 수 있다
-    assert body["diag"]["backtrack_a"]["hybrid"] == "A" and body["diag"]["backtrack_b"]["hybrid"] == "B"
-    # D 후보도 함께 내고, 병합은 algo 규칙(택시 양끝 비교)으로 한다 — (b)A · (b)B · (a) · D 네 묶음
-    assert "anchors" in body["diag"]["gap"]
-    assert merged and merged[0] == 4   # C 는 예산을 따로 둬 한 번 더 병합할 수 있다
-    assert "detour" in body["diag"]
+        body = c.get("/api/hybrid", params=HYB_OD).json()
+    assert sorted(seen) == ["head", "tail"]
+    assert {"route", "line"} <= set(body["diag"]["heads"]) and {"route", "line"} <= set(body["diag"]["tails"])
+    assert body["diag"]["search"]["candidates"] == body["diag"]["pairs"]["candidates"]
+    assert body["diag"]["search"]["candidates"] == sum(body["diag"]["search"]["status"].values())
 
 
 @pytest.mark.parametrize("reuse", [False, True])
-def test_hybrid_uses_static_wait_for_all_candidates(tmp_path, up, monkeypatch, reuse):
-    from algo import anchors
+def test_hybrid_heads_use_the_walked_copy_and_tails_the_scheduled_routes(tmp_path, up, monkeypatch, reuse):
+    """앞부분은 걸어서 타는 실시간 사본, 뒷부분은 택시로 닿아 타는 원래 경로 — 실시간이 없으면 둘은 같은 경로다."""
+    from algo import search
     seen = {}
-    real_gap, real_perturb = anchors.propose_gap, anchors.propose_perturb
+    real = search.propose
 
-    def gap_spy(o, d, routes, **kw):
-        seen["gap"] = routes
-        return real_gap(o, d, routes, **kw)
+    def spy(stops, routes, lines, o, d, head_routes, tail_routes, **kw):
+        seen.update(head=head_routes, tail=tail_routes)
+        return real(stops, routes, lines, o, d, head_routes, tail_routes, **kw)
 
-    def perturb_spy(o, d, routes, **kw):
-        seen.setdefault("perturb", {})[kw.get("hybrids")] = routes
-        return real_perturb(o, d, routes, **kw)
-
-    monkeypatch.setattr(anchors, "propose_gap", gap_spy)
-    monkeypatch.setattr(anchors, "propose_perturb", perturb_spy)
+    monkeypatch.setattr(search, "propose", spy)
     with serve(make_settings(tmp_path), up) as c:
-        params = {**HYB_OD, "top": 2}
         if reuse:
             routes = c.get("/api/transit", params=HYB_OD).json()["routes"]
-            response = c.post("/api/hybrid", params=params, json={"routes": routes})
+            response = c.post("/api/hybrid", params=HYB_OD, json={"routes": routes})
         else:
-            response = c.get("/api/hybrid", params=params)
+            response = c.get("/api/hybrid", params=HYB_OD)
         assert response.status_code == 200, response.text
         body = response.json()
-    assert seen["gap"] is seen["perturb"][("A",)]
-    assert seen["gap"] is seen["perturb"][("B",)]
+    assert seen["head"] is seen["tail"]
     assert not (set(up.hosts()) & {"ws.bus.go.kr", "apis.data.go.kr", "swopenapi.seoul.go.kr"})
     assert body["diag"]["realtime"] is None
 
@@ -589,7 +575,7 @@ def test_hybrid_reuses_the_search_result(tmp_path, up, monkeypatch):
             return await real(st, sx, sy, ex, ey, *args, **kw)
 
         monkeypatch.setattr(api_mod, "transit_payload", spy)
-        r = c.post("/api/hybrid", params={**HYB_OD, "top": 2}, json={"routes": routes})
+        r = c.post("/api/hybrid", params=HYB_OD, json={"routes": routes})
     assert r.status_code == 200, r.text
     assert r.headers["cache-control"] == "no-store"
     body = r.json()
@@ -599,24 +585,18 @@ def test_hybrid_reuses_the_search_result(tmp_path, up, monkeypatch):
 
 
 def test_hybrid_get_still_calls_the_base_route(client):
-    assert client.get("/api/hybrid", params={**HYB_OD, "top": 1}).json()["diag"]["base_source"] == "called"
+    assert client.get("/api/hybrid", params=HYB_OD).json()["diag"]["base_source"] == "called"
 
 
-@pytest.mark.parametrize("method", ["get", "post"])
-def test_hybrid_default_and_maximum_budget_are_ten(client, monkeypatch, method):
-    import app.api as api_mod
-    calls = []
-
-    async def plan(*args, **kwargs):
-        calls.append(kwargs["top"])
-        return {}
-
-    monkeypatch.setattr(api_mod.hybrid_plan, "plan", plan)
-    body = {"json": {"routes": [{"steps": []}]}} if method == "post" else {}
-    for params in (HYB_OD, {**HYB_OD, "top": 10}):
-        assert getattr(client, method)("/api/hybrid", params=params, **body).status_code == 200
-    assert getattr(client, method)("/api/hybrid", params={**HYB_OD, "top": 11}, **body).status_code == 400
-    assert calls == [10, 10]
+def test_hybrid_search_stops_at_the_query_budget(tmp_path, up, monkeypatch):
+    """후보 확인은 카카오 고유 질의 SEARCH_BUDGET 회에서 멈춘다 — 기준 경로 1콜은 따로다."""
+    import app.hybrid as hybrid
+    monkeypatch.setattr(hybrid, "SEARCH_BUDGET", 1)
+    with serve(make_settings(tmp_path), up) as c:
+        body = c.get("/api/hybrid", params=HYB_OD).json()
+    kakao = [h for h in up.hosts() if h in ("dapi.kakao.com", "apis-navi.kakaomobility.com")]
+    assert body["diag"]["search"]["budget"] == 1 and body["diag"]["search"]["queries"] <= 1
+    assert len(kakao) <= 1 + 1   # 기준 경로 + 후보 질의 1
 
 
 @pytest.mark.parametrize("payload", [{"routes": "x"}, {"routes": []}, {"routes": [{"steps": [{"type": "BUS"}]}]}, ["routes"]])
@@ -626,7 +606,7 @@ def test_hybrid_reuse_rejects_a_bad_body(client, payload):
 
 def test_hybrid_ignores_pref(client):
     """선호는 더 받지 않는다 — 옛 화면이 보내도 시간 중시로 찾는다."""
-    body = client.get("/api/hybrid", params={**HYB_OD, "top": 1, "pref": "cost"}).json()
+    body = client.get("/api/hybrid", params={**HYB_OD, "pref": "cost"}).json()
     assert body["pref"] == "time"
 
 

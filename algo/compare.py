@@ -76,28 +76,7 @@ def saving_per_min(cand, base):
     return ((cand["fare"] or 0) - (base["fare"] or 0)) / saved_min
 
 
-def diversify(items, n=4, key="hybrid"):
-    """구조가 서로 다른 것부터 n 개 — 전 구간 대중교통 · first-mile · last-mile · 전 구간 택시.
-
-    한 유형이 상위를 다 차지하면 사용자가 고를 것이 없다. 유형마다 하나씩 먼저 채우고 남는 자리를 점수순으로 준다.
-    """
-    out, seen = [], set()
-    for it in items:
-        if it.get(key) not in seen:
-            seen.add(it.get(key))
-            out.append(it)
-    for it in items:
-        if len(out) >= n:
-            break
-        if it not in out:
-            out.append(it)
-    return out[:n]
-
-
-def saves_enough(time_s, base_time_s, *, walking=False):
-    """택시를 쓰는 최소 기준 — 같은 잣대의 기준선보다 `TAXI_MIN_SAVING_S`(5분) 이상 빠른가.
-
-    택시가 대신한 부분을 아는 후보(D)는 후보 단계에서 이미 거르고, 모르는 후보((b)·(a)·C)는 검증한 시간으로 여기서 견준다.
-    """
-    return time_s < base_time_s if walking else base_time_s - time_s >= TAXI_MIN_SAVING_S
+def saves_enough(time_s, base_time_s):
+    """택시를 쓰는 최소 기준 — 같은 잣대의 기준선보다 `TAXI_MIN_SAVING_S`(5분) 이상 빠른가. 검증한 시간으로 견준다."""
+    return base_time_s - time_s >= TAXI_MIN_SAVING_S
 

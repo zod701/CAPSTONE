@@ -596,9 +596,8 @@ async function runHybrid() {
   }
 }
 
-// 앵커를 사이에 두고 택시 구간과 대중교통 구간을 함께 그린다.
-// A 는 앵커 → 도착지가 대중교통이고, B 는 출발지 → 앵커가 대중교통이다(나머지 끝이 택시).
-// D 는 출발지 → 도착지 기준 경로에서 택시가 대신한 한 구간만 빠진 경로다 — 빈 자리를 택시 선이 메운다
+// 택시 구간과 대중교통 구간을 함께 그린다. 대중교통은 택시를 뺀 구간들이라 택시 선이 빈 자리를 메운다.
+// 택시가 맨 앞이면 대중교통은 택시에서 내린 곳(to)부터, 맨 끝이면 택시를 탄 곳(from)까지다
 function selectHybrid(i) {
   const r = state.hybrid?.routes?.[i];
   if (!r) return;
@@ -609,11 +608,11 @@ function selectHybrid(i) {
   R.markSelectedKey(`h:${i}`);
   R.markCarSelected($("car-body"), false);
   R.clearTransit();
-  const at = L.latLng(r.anchor.lat, r.anchor.lon);
-  const [from, to] = r.hybrid === "A" ? [at, state.dest] : r.hybrid === "B" ? [state.origin, at] : [state.origin, state.dest];
+  const start = r.taxi_at === 0 ? L.latLng(r.to.lat, r.to.lon) : state.origin;
+  const end = r.taxi_at === r.transit.steps.length ? L.latLng(r.from.lat, r.from.lon) : state.dest;
   panel.showSelection(() => {
-    if (r.transit) R.drawRoute(r.transit, from, to);
-    R.drawCar(r.walking || r.taxi, { fit: true, walking: !!r.walking });
+    R.drawRoute(r.transit, start, end);
+    R.drawCar(r.taxi, { fit: true });
     revealSelectedCard();
   });
 }

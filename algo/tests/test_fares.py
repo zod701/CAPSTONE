@@ -3,8 +3,8 @@ from datetime import datetime
 
 import pytest
 
-from algo.fares import candidate_fare, estimate
-from algo.anchors import prefix_steps, propose_perturb, route_points
+from algo.fares import estimate
+from algo.anchors import prefix_steps, route_points
 
 DAY = datetime(2026, 9, 23, 12)
 
@@ -141,24 +141,12 @@ def test_multiple_boarding_choices_and_candidate_range():
     first["fare_routes"] += bus(8, "b", kind="지선", source="seoul")["fare_routes"]
     second = bus(8, "c")
     second["fare_routes"] += bus(8, "d", kind="지선", source="seoul")["fare_routes"]
-    cand = {"hybrid": "D", "transit_fare_cap": 4200,
-            "fare_steps": [first, {"type": "TAXI", "time_s": 0}, second]}
-    result = candidate_fare(cand, 600, at=DAY)
+    result = estimate([first, {"type": "TAXI", "time_s": 600}, second], 4200, at=DAY)
     assert (result["min"], result["max"], result["value"]) == (1700, 1850, 1850)
     assert result["transfer_kept"] is True
-    expired = candidate_fare(cand, 1801, at=DAY)
+    expired = estimate([first, {"type": "TAXI", "time_s": 1801}, second], 4200, at=DAY)
     assert (expired["min"], expired["max"]) == (3000, 3300)
     assert expired["transfer_kept"] is False
-
-
-def test_d_unknown_choice_keeps_original_split_fallback():
-    first = bus(8, "a")
-    first["fare_routes"] += bus(8, "unknown", kind="공항")["fare_routes"]
-    cand = {"hybrid": "D", "transit_fare_cap": 4200,
-            "fare_steps": [first, {"type": "TAXI", "time_s": 0}, bus(8, "b")]}
-    result = candidate_fare(cand, 600, at=DAY)
-    assert result["source"] == "fallback" and result["value"] == 5850
-    assert "min" not in result
 
 
 def test_midride_prefix_uses_fractional_distance_without_mutating_original():
@@ -172,31 +160,5 @@ def test_midride_prefix_uses_fractional_distance_without_mutating_original():
     assert step["distance_m"] == 30000 and len(step["stop_locs"]) == 3
 
 
-def test_candidate_verification_uses_actual_taxi_time_and_tail_wait():
-    cand = {"hybrid": "C", "via": "reanchor", "transit_fare_cap": 2500,
-            "fare_steps": [bus(8), {"type": "TAXI", "time_s": 0}]}
-    tail = {"steps": [bus(8, "b", wait=200)], "fare": {"value": 1650}}
-    assert candidate_fare(cand, 1600, tail=tail, at=DAY)["value"] == 1850
-    assert candidate_fare(cand, 1601, tail=tail, at=DAY)["value"] == 3300
-
-
-def test_zero_tail_fare_is_not_replaced_by_candidate_fare():
-    cand = {"hybrid": "C", "via": "reanchor", "transit_fare_cap": 2500, "tail_fare": 5000}
-    assert candidate_fare(cand, 600, tail={"steps": [], "fare": {"value": 0}})["value"] == 2500
-
-
-def test_d_does_not_keep_the_removed_bus_fare_or_distance():
-    cand = {"hybrid": "D", "transit_fare_cap": 4000,
-            "fare_steps": [bus(4), {"type": "TAXI", "time_s": 0}, bus(4, "b")]}
-    assert candidate_fare(cand, 600, at=DAY)["value"] == 1650
-
-
-def test_perturb_b_prices_retained_prefix_instead_of_whole_route():
-    first, second = bus(5), bus(30, "b")
-    points = [{"id": str(i), "name": str(i), "lon": 127 + i * .03, "lat": 37} for i in range(3)]
-    for i, step in enumerate((first, second)):
-        step["resolution"] = {"board": {"chosen": points[i]}, "alight": {"chosen": points[i + 1]}}
-    cands, _ = propose_perturb((127, 37), (127.12, 37), [{"steps": [first, second], "fare": {"value": 2150}}],
-                                vot=500, at=DAY, hybrids=("B",))
-    c = next(c for c in cands if c["step_index"] == 0)
-    assert c["fare_info"]["value"] == 1650
+def test_taxi_between_rides_does_not_charge_the_skipped_distance():
+    assert estimate([bus(4), {"type": "TAXI", "time_s": 600}, bus(4, "b")], 4000, at=DAY)["value"] == 1650

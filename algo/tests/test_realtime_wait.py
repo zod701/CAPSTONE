@@ -6,7 +6,7 @@ from geoutil import EARTH_R
 
 from app.linesdb import LinesDB
 
-from algo.anchors import (BUS_S_PER_STOP, GAP_MIN_S, RAIL_S_PER_STATION, arrival, arrival_s, propose_gap, propose_perturb,
+from algo.anchors import (BUS_S_PER_STOP, RAIL_S_PER_STATION, arrival, arrival_s,
                           realtime_first_wait, subway_toward, walk_s, with_realtime_first_wait)
 
 O = (127.0, 37.3)
@@ -147,32 +147,6 @@ def test_route_copy_gets_realtime_first_wait_net_of_walking():
 def test_stop_without_arrivals_keeps_the_static_wait():
     (rt,), diag = with_realtime_first_wait([two_leg_route()], O, {})
     assert rt["steps"][0]["wait_s"] == 120 and diag == {"no_arrivals": 1}
-
-
-def test_realtime_wait_can_open_a_gap_the_static_wait_hid():
-    # 정적 배차로는 2분 대기라 공백이 아니었는데, 실시간으로 보니 다음 차가 20분 뒤다 — 그 구간이 D 후보가 된다
-    route = two_leg_route()
-    assert not [c for c in propose_gap(O, move(O, 0, 6200), [route], vot=300.0)[0] if c["anchor"] == "p>m1"]
-    walk = walk_s(415)
-    (rt,), _ = with_realtime_first_wait([route], O, {"p": [bus_item("r1", eta_s=walk + 1200)]})
-    assert rt["steps"][0]["wait_s"] >= GAP_MIN_S
-    assert [c["anchor"] for c in propose_gap(O, move(O, 0, 6200), [rt], vot=300.0)[0]] == ["p>m1"]
-
-
-def test_perturb_makes_only_the_requested_types():
-    # A 와 B 는 넘길 경로가 달라 따로 부른다 — 요청한 유형만 나온다
-    route, dest = two_leg_route(), move(O, 0, 6200)
-    assert {c["hybrid"] for c in propose_perturb(O, dest, [route], vot=300.0, hybrids=("A",))[0]} == {"A"}
-    assert {c["hybrid"] for c in propose_perturb(O, dest, [route], vot=300.0, hybrids=("B",))[0]} == {"B"}
-
-
-def test_last_mile_uses_the_realtime_first_wait_like_the_baseline():
-    # B 는 걸어서 첫 정류장에 닿는다 — 실시간 사본을 넘기면 첫 대기가 기준선과 같은 실시간 값(10분)이 된다
-    route, dest = two_leg_route(), move(O, 0, 6200)
-    (rt,), _ = with_realtime_first_wait([route], O, {"p": [bus_item("r1", eta_s=walk_s(415) + 600)]})
-    static = next(c for c in propose_perturb(O, dest, [route], vot=300.0, hybrids=("B",))[0] if c["anchor"] == "m1")
-    live = next(c for c in propose_perturb(O, dest, [rt], vot=300.0, hybrids=("B",))[0] if c["anchor"] == "m1")
-    assert (static["wait_s"], live["wait_s"]) == (120, 600)
 
 
 def test_arrival_tells_prediction_from_stops_estimate():

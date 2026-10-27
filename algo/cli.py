@@ -1,4 +1,4 @@
-r"""앵커 선택 실험 진입점 — plan(후보 생성·검증) / calibrate(택시 근사 보정).
+r"""하이브리드 실험 진입점 — plan(후보 생성·순차 검증) / calibrate(택시 근사 보정).
 
 카카오 응답은 저장하지 않는다. 화면에 남기는 것은 **파생 수치**(시간·비용·원/분)뿐이다 → method.md §2.2.
 
@@ -8,12 +8,13 @@ r"""앵커 선택 실험 진입점 — plan(후보 생성·검증) / calibrate(�
 끝난 경로를 받는다. 그래서 실험 중에도 데모 웹을 띄워 둔 채로 쓸 수 있다.
 
     .\.venv\Scripts\python.exe -m algo.cli plan --od dongtan --offline
-    .\.venv\Scripts\python.exe -m algo.cli plan --od suji --top 5
+    .\.venv\Scripts\python.exe -m algo.cli plan --od suji --budget 20
     .\.venv\Scripts\python.exe -m algo.cli calibrate --samples 150
 """
 import argparse
 import asyncio
 import random
+from collections import Counter
 from datetime import datetime
 
 import httpx
@@ -26,7 +27,8 @@ from app.livestationsdb import LiveStationsDB
 from app.routesdb import RoutesDB
 from app.stopsdb import StopsDB
 
-from algo import anchors, compare
+from algo import anchors, compare, search
+from algo.lazy_pareto import QueryUnavailable
 
 # 접지 실측(E7·E10·E13)과 같은 공통 표본이다 — 여기서 나온 수치가 그 실험들과 곧바로 이어진다
 OD_PRESETS = {
@@ -88,22 +90,36 @@ def _od(args):
     return "%s → %s" % (args.frm, args.to), _point(args.frm), _point(args.to)
 
 
-def _sgg(dbs, pt):
-    """좌표가 속한 시군 — 가장 가까운 정류소의 값으로 본다 (택시 요금 유형·시계외 판정)."""
-    return anchors._sgg_at(anchors._near(dbs["stops"], "bus", pt, (2000.0, 10000.0)))
-
-
 def print_candidates(cands, title):
     """후보 표 — 파생 수치만 찍는다."""
     print("\n%s  (%d개)" % (title, len(cands)))
-    print("  %-4s %-18s %-9s %6s %8s %6s %6s %6s %8s" %
-          ("유형", "앵커", "노선", "택시분", "택시요금", "대기분", "승차분", "도보분", "점수분"))
+    print("  %-14s %-16s %-16s %6s %8s %7s %8s %8s" %
+          ("앞 → 뒤", "택시 타는 곳", "택시 내리는 곳", "택시분", "택시요금", "추정분", "추정요금", "점수분"))
     for c in cands:
-        print("  %-4s %-18s %-9s %6.1f %8.0f %6s %6.1f %6.1f %8.1f" % (
-            c["strategy"] + c["hybrid"], (c["name"] or "")[:16], str(c.get("ride_name") or "")[:9],
-            c["taxi_s"] / 60, c["fare"],
-            "?" if c["wait_s"] is None else "%.1f" % (c["wait_s"] / 60),
-            c["ride_s"] / 60, (c["walk_s"] + c.get("link_walk_s", 0)) / 60, c["score_s"] / 60))
+        print("  %-14s %-16s %-16s %6.1f %8.0f %7.1f %8.0f %8.1f" % (
+            "%s→%s" % (c["head"]["source"], c["tail"]["source"]), c["head"]["point"]["name"][:16],
+            c["tail"]["point"]["name"][:16], c["taxi_s"] / 60, c["taxi_fare"], c["time_s"] / 60, c["fare"],
+            c["score_s"] / 60))
+
+
+class _Search:
+    """탐색이 부르는 api — 백엔드 실패는 '알 수 없음'(QueryUnavailable)으로 넘긴다."""
+
+    def __init__(self, api):
+        self.api, self.failed = api, []
+
+    async def _call(self, fn, a, b):
+        try:
+            return await fn(a, b)
+        except (RuntimeError, httpx.HTTPError) as err:
+            self.failed.append(str(err))
+            raise QueryUnavailable() from err
+
+    async def car(self, a, b):
+        return await self._call(self.api.car, a, b)
+
+    async def transit(self, a, b):
+        return await self._call(self.api.transit, a, b)
 
 
 def cmd_plan(args):
@@ -113,25 +129,11 @@ def cmd_plan(args):
     at = datetime.now(KST).replace(tzinfo=None) if args.at is None else datetime.fromisoformat(args.at)
     vot = anchors.VOT[args.pref]
     print("%s  선호=%s(VOT %.0f원/분)  기준시각=%s" % (title, args.pref, vot, at.strftime("%m-%d %H:%M")))
-
-    sel = []
-    for hybrid in ("A", "B"):   # A = 택시로 타러 간다 · B = 걸어서 타고 내려서 택시 (§3.2 의 대칭판)
-        cands, diag = anchors.propose_backtrack(
-            dbs["stops"], dbs["routes"], dbs["lines"], o, d, vot=vot, hybrid=hybrid, at=at,
-            headway=dbs["headway"], phys=dbs["phys"], hours=dbs["hours"], t_max_s=args.t_max * 60)
-        print("(b) %s 방향:" % hybrid, diag)
-        picked = anchors.top_n(cands, args.top)
-        print_candidates(picked, "(b) %s 상위 %d" % (hybrid, args.top))
-        sel += picked
-
-    if args.offline:
-        print("\n--offline — 쿼터를 쓰지 않았다. 온라인 검증은 이 플래그를 빼고 실행한다.")
-        return
-    asyncio.run(_run_plan(dbs, title, o, d, sel, vot, at, args))
+    asyncio.run(_run_plan(dbs, o, d, vot, at, args))
 
 
-async def _run_plan(dbs, title, o, d, sel, vot, at, args):
-    """온라인 검증 — 기준 경로 1콜 + (a) 후보 생성 + 앵커마다 검증 콜."""
+async def _run_plan(dbs, o, d, vot, at, args):
+    """기준 경로 1콜 → 후보 생성(쿼터 0) → 순차 검증(고유 질의 --budget 회)."""
     async with httpx.AsyncClient(timeout=args.timeout) as http:
         api = Backend(http, args.api)
         try:
@@ -146,8 +148,8 @@ async def _run_plan(dbs, title, o, d, sel, vot, at, args):
         if not routes:
             print("기준 경로 없음:", base_resp.get("message") or base_resp.get("status"))
             return
-        # 첫 승차 대기를 실시간으로 — 기준선과 D 가 같은 값을 써야 둘을 견줄 수 있다. 기준 시각을 지정했으면 '지금' 의
-        # 도착정보가 그 시각과 맞지 않아 쓰지 않는다. (a) 의 B 도 걸어서 첫 정류장에 닿으므로 사본을 쓰고, A 만 원래 경로다
+        # 첫 승차 대기를 실시간으로 — 기준선과 앞부분(걸어서 탄다)이 같은 값을 써야 견줄 수 있다. 기준 시각을 지정했으면
+        # '지금' 의 도착정보가 그 시각과 맞지 않아 쓰지 않는다. 뒷부분은 택시로 닿아 타므로 원래 경로다
         rt_routes = routes
         if args.at is None and not args.no_realtime:
             before_rt = await api.quota()
@@ -161,35 +163,24 @@ async def _run_plan(dbs, title, o, d, sel, vot, at, args):
         print("기준선(전 구간 대중교통): %.1f분 %s원 도보%.0fm  대안 %d개"
               % (base["time_s"] / 60, base["fare"], base["walk_m"], len(routes)))
 
-        perturb = dict(vot=vot, sgg_o=_sgg(dbs, o), sgg_d=_sgg(dbs, d), at=at, t_max_s=args.t_max * 60)
-        a_only, a_diag = anchors.propose_perturb(o, d, routes, hybrids=("A",), **perturb)        # 택시로 정류장에 닿는다
-        b_only, b_diag = anchors.propose_perturb(o, d, rt_routes, hybrids=("B",), **perturb)     # 걸어서 첫 정류장에 닿는다
-        a_cands = sorted(a_only + b_only, key=lambda c: c["score_s"])
-        print("(a) 기준 경로 섭동: A", a_diag, "· B", b_diag)
-        print_candidates(anchors.top_n(a_cands, args.top, max_per_route=args.top), "(a) 상위 %d" % args.top)
-        d_cands, d_diag = anchors.propose_gap(o, d, rt_routes, vot=vot, at=at, t_max_s=args.t_max * 60)
-        print("(a) D 공백 메우기:", d_diag)
-        print_candidates(d_cands[:args.top], "(a) D 상위 %d" % args.top)
-        c_cands, c_diag = anchors.propose_detour(
-            dbs["stops"], dbs["routes"], dbs["lines"], o, d, rt_routes, vot=vot, at=at, headway=dbs["headway"],
-            phys=dbs["phys"], hours=dbs["hours"], t_max_s=args.t_max * 60,
-            n_points=args.c_points, n_anchors=args.c_anchors)
-        print("(C) 돌아가기 시작하는 정류장에서 다시 찾기:", c_diag)
-        print_candidates(c_cands, "(C) 후보")
+        cands, diag = search.propose(dbs["stops"], dbs["routes"], dbs["lines"], o, d, rt_routes, routes, vot=vot,
+                                     baseline_s=base["time_s"], at=at, headway=dbs["headway"], phys=dbs["phys"],
+                                     hours=dbs["hours"], t_max_s=args.t_max * 60)
+        print("앞부분:", diag["heads"], "· 뒷부분:", diag["tails"], "· 짝:", diag["pairs"])
+        print_candidates(cands[:args.show], "추정 점수 상위 %d" % args.show)
+        if args.offline:
+            print("\n--offline — 기준 경로 1콜 뒤 검증하지 않았다.")
+            return
 
-        picks = anchors.merge_candidates(sel, a_cands, d_cands, top=args.top)
-        # C 는 예산을 따로 둔다 — 정류장 수 × (택시로 목적지 1 + 앵커 수) 만큼만 만들어 전부 확인한다
-        picks += anchors.merge_candidates(c_cands, top=len(c_cands)) if c_cands else []
-        n_transit = sum(1 for c in picks
-                        if c["hybrid"] == "A" or c["strategy"] == "b" or c.get("via") == "reanchor")
-        print("\n검증할 앵커 %d개 (예상 transit %d콜 · car %d콜 — (a)의 B·D 는 나머지 구간이 기준 경로에 있어 공짜다)"
-              % (len(picks), n_transit, len(picks)))
-        results = await asyncio.gather(*(_verify_one(api, o, d, c, vot, at) for c in picks),
-                                       return_exceptions=True)
-        rows = [r for r in results if isinstance(r, dict)]
-        for err in (r for r in results if not isinstance(r, dict)):
-            print("  검증 실패:", err)
-        _report(rows, base, vot)
+        known = {"T%d" % i: search.Cost(r["time_s"], r["fare"])
+                 for i, r in enumerate(compare.reconstruct(x, o, d) for x in rt_routes) if r["fare"] is not None}
+        wrapped = _Search(api)
+        found, run = await search.run(cands, known, wrapped, o, d, vot=vot, baseline_s=base["time_s"], at=at,
+                                      budget=args.budget, parallel=args.parallel)
+        for err in wrapped.failed:
+            print("  조회 실패:", err)
+        print("\n순차 검증: 질의 %d회 · 후보 상태 %s" % (len(run.query_order), dict(Counter(run.status.values()))))
+        _report(cands, found, base, vot)
         after = await api.quota()
     print("쿼터 소모: transit %d · car %d"
           % (after["transit"]["used"] - before["transit"]["used"],
@@ -242,107 +233,28 @@ def _print_first_waits(routes, rt_routes):
             "?" if s["static_wait_s"] is None else "%.1f" % (s["static_wait_s"] / 60), s["wait_s"] / 60, s["wait_source"]))
 
 
-async def _connection(api, cand, start, end):
-    if cand.get("link_mode") == "WALKING":
-        return anchors.walking_leg(cand, start, end)
-    return await api.car(start, end)
-
-
-async def _verify_detour(api, d, cand, vot, at=None):
-    """C 후보 확인 — 돌아가기 시작하는 정류장까지는 기준 경로 시간(`head_s`), 거기서부터 온라인으로 잰다.
-
-    택시로 목적지까지는 자동차 1콜, 직행 노선 앵커는 자동차 + 대중교통 2콜이다.
-    대중교통 요금은 앞뒤 구간의 거리와 환승 이력을 합쳐 다시 계산한다.
-    """
-    frm, pt = (cand["from_lon"], cand["from_lat"]), (cand["lon"], cand["lat"])
-    if cand["via"] == "taxi_to_d":
-        car = await _connection(api, cand, frm, d)
-        time_s = cand["head_s"] + anchors.connection_plan_s(cand, car["duration_s"], connect=False)
-        fare_info = anchors.candidate_fare(cand, anchors.connection_plan_s(cand, car["duration_s"], connect=False), at=at)
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
-        return {"cand": cand, "time_s": time_s, "fare": fare, "fare_info": fare_info, "note": fare_info["reason"]}
-    car, leg = await asyncio.gather(_connection(api, cand, frm, pt), api.transit(pt, d))
-    legs = leg.get("routes") or []
-    if not legs:
-        return {"cand": cand, "time_s": None, "fare": None, "note": leg.get("status")}
-    plan = anchors.connection_plan_s(cand, car["duration_s"], connect=True)
-    options = [(compare.reconstruct(r, pt, d), anchors.candidate_fare(cand, plan, tail=r, at=at)) for r in legs]
-    best, fare_info = min(options, key=lambda x: compare.gc_s(x[0]["time_s"], x[1]["value"], vot))
-    fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
-    return {"cand": cand, "time_s": cand["head_s"] + plan + best["time_s"], "fare": fare,
-            "fare_info": fare_info, "note": fare_info["reason"]}
-
-
-async def _verify_one(api, o, d, cand, vot, at=None):
-    """후보 하나를 온라인으로 확인.
-
-    A 유형은 `car(O→앵커)` + `대중교통(앵커→D)` 2콜, (b)의 B 는 `대중교통(O→앵커)` + `car(앵커→D)` 2콜,
-    (a)의 B 는 앞 구간이 기준 경로에 있어 `car(앵커→D)` 1콜, D 는 공백 한 구간만 바꿔 `car(공백 시작→끝)` 1콜이다.
-    """
-    pt = (cand["lon"], cand["lat"])
-    fare_info = None
-    if cand["hybrid"] == "C":
-        return await _verify_detour(api, d, cand, vot, at)
-    if cand["hybrid"] == "A":
-        car, leg = await asyncio.gather(_connection(api, cand, o, pt), api.transit(pt, d))
-        legs = leg.get("routes") or []
-        if not legs:
-            return {"cand": cand, "time_s": None, "fare": None, "note": leg.get("status")}
-        best = min((compare.reconstruct(r, pt, d) for r in legs),
-                   key=lambda b: compare.gc_s(b["time_s"], b["fare"], vot))
-        time_s = anchors.connection_plan_s(cand, car["duration_s"], connect=True) + best["time_s"]
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (best["fare"] or 0)
-    elif cand["strategy"] == "b":
-        # (b)의 B 는 기준 경로에 없는 노선을 찾아낸 것이라 앞 구간도 확인해야 한다
-        leg, car = await asyncio.gather(api.transit(o, pt), _connection(api, cand, pt, d))
-        legs = leg.get("routes") or []
-        if not legs:
-            return {"cand": cand, "time_s": None, "fare": None, "note": leg.get("status")}
-        best = min((compare.reconstruct(r, o, pt) for r in legs),
-                   key=lambda b: compare.gc_s(b["time_s"], b["fare"], vot))
-        time_s = best["time_s"] + anchors.connection_plan_s(cand, car["duration_s"], connect=False)
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + (best["fare"] or 0)
-    elif cand["hybrid"] == "D":
-        # 공백 한 구간만 택시로 — 나머지는 기준 경로에 그대로 있다. 내려서 다시 차를 타면 연결 버퍼를 씌운다
-        car = await _connection(api, cand, (cand["from_lon"], cand["from_lat"]), pt)
-        eta = car["duration_s"] or 0
-        time_s = (cand["base_time_s"] - cand["gap_s"]
-                  + anchors.connection_plan_s(cand, eta, connect=cand["resume_ride"]))
-        fare_info = anchors.candidate_fare(cand, anchors.connection_plan_s(cand, eta, connect=cand["resume_ride"]), at=at)
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
-    else:
-        # (a)의 B 는 앞 구간이 기준 경로에 그대로 있다 — 대중교통 콜이 들지 않는다
-        car = await _connection(api, cand, pt, d)
-        time_s = (cand["ride_s"] + (cand["wait_s"] or 0) + cand["walk_s"]
-                  + anchors.connection_plan_s(cand, car["duration_s"], connect=False))
-        fare_info = anchors.candidate_fare(cand, anchors.connection_plan_s(cand, car["duration_s"], connect=False), at=at)
-        fare = (car["fare"]["taxi"] or 0) + (car["fare"]["toll"] or 0) + fare_info["value"]
-    return {"cand": cand, "time_s": time_s, "fare": fare, "fare_info": fare_info,
-            "note": fare_info["reason"] if fare_info else ""}
-
-
-def _report(rows, base, vot):
-    """검증 결과 → Pareto · 원/분 · 구조 다양성."""
-    ok = [r for r in rows if r["time_s"] is not None]
+def _report(cands, found, base, vot):
+    """검증 결과 → 5분 기준 · Pareto · 원/분. 비지배해를 일반화 비용 순으로 모두 찍는다."""
+    by_id = {c["id"]: c for c in cands}
+    rows = [dict(r, cand=by_id[cid]) for cid, r in found.items()]
     # 택시를 쓰는 최소 기준 — 같은 잣대의 기준선보다 5분 이상 빠르지 않은 후보는 보여 주지 않는다
-    little = [r for r in ok if not compare.saves_enough(r["time_s"], base["time_s"], walking=r["cand"].get("link_mode") == "WALKING")]
-    if little:
-        print("  시간 절약 기준 미달로 뺀 후보 %d개 (택시 %d분 이상, 도보 0분 초과)" % (len(little), anchors.TAXI_MIN_SAVING_S // 60))
-    ok = [r for r in ok if r not in little]
+    ok = [r for r in rows if compare.saves_enough(r["time_s"], base["time_s"])]
+    if len(ok) < len(rows):
+        print("  시간 절약 기준 미달로 뺀 후보 %d개 (택시 %d분 이상)" % (len(rows) - len(ok), anchors.TAXI_MIN_SAVING_S // 60))
     for r in ok:
-        r["hybrid"] = r["cand"]["hybrid"]
         r["gc_s"] = compare.gc_s(r["time_s"], r["fare"], vot)
         r["won_per_min"] = compare.saving_per_min(r, base)
-    baseline = dict(base, cand=None, hybrid="E",
-                    gc_s=compare.gc_s(base["time_s"], base["fare"], vot), won_per_min=None)
+    baseline = dict(base, cand=None, gc_s=compare.gc_s(base["time_s"], base["fare"], vot), won_per_min=None)
     front = compare.pareto(ok + [baseline])
-    print("\n검증 결과 — 비지배해 %d개 / 후보 %d개" % (len(front), len(ok)))
-    for r in compare.diversify(sorted(front, key=lambda x: x["gc_s"])):
-        name = "전 구간 대중교통(기준선)" if r["cand"] is None else "%s %s" % (r["hybrid"], r["cand"]["name"])
+    print("\n검증 결과 — 비지배해 %d개 / 결과 %d개" % (len(front), len(ok)))
+    for r in sorted(front, key=lambda x: x["gc_s"]):
+        c = r["cand"]
+        name = ("전 구간 대중교통(기준선)" if c is None
+                else "%s → %s" % (c["head"]["point"]["name"], c["tail"]["point"]["name"]))
         eff = "" if r.get("won_per_min") is None else "  %.0f원/분 %s" % (
             r["won_per_min"], "비추천" if r["won_per_min"] > vot else "추천")
-        print("  %-28s %6.1f분 %8.0f원  GC %6.1f분%s"
-              % (name[:28], r["time_s"] / 60, r["fare"], r["gc_s"] / 60, eff))
+        print("  %-30s %6.1f분 %8.0f원  GC %6.1f분%s"
+              % (name[:30], r["time_s"] / 60, r["fare"], r["gc_s"] / 60, eff))
 
 
 def cmd_calibrate(args):
@@ -475,23 +387,23 @@ def _calibration_report(rows, now):
 
 
 def main(argv=None):
-    p = argparse.ArgumentParser(prog="algo.cli", description="앵커 선택 실험")
+    p = argparse.ArgumentParser(prog="algo.cli", description="하이브리드 실험")
     p.add_argument("--api", default=DEFAULT_API, help="데모 웹 백엔드 주소 (쿼터를 한 프로세스에서 관리한다)")
     p.add_argument("--timeout", type=float, default=30.0)
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    q = sub.add_parser("plan", help="앵커 후보 생성과 검증")
+    q = sub.add_parser("plan", help="후보 생성과 순차 검증")
     q.add_argument("--od", choices=sorted(OD_PRESETS), help="경기 외곽 공통 표본 OD")
     q.add_argument("--from", dest="frm", help="출발 'lon,lat'")
     q.add_argument("--to", help="도착 'lon,lat'")
     q.add_argument("--pref", choices=sorted(anchors.VOT), default="balance")
-    q.add_argument("--top", type=int, default=8, help="온라인으로 확인할 앵커 수")
+    q.add_argument("--budget", type=int, default=30, help="후보 확인에 쓸 카카오 고유 질의 수(자동차 + 대중교통)")
+    q.add_argument("--parallel", type=int, default=3, help="한 번에 함께 보낼 질의 수")
+    q.add_argument("--show", type=int, default=15, help="찍을 추정 점수 상위 후보 수")
     q.add_argument("--t-max", type=int, default=30, help="택시 구간 상한(분)")
     q.add_argument("--at", help="기준 시각 ISO (기본: 지금)")
-    q.add_argument("--offline", action="store_true", help="쿼터를 쓰지 않고 후보 생성까지만")
+    q.add_argument("--offline", action="store_true", help="기준 경로 1콜 뒤 후보 생성까지만")
     q.add_argument("--no-realtime", action="store_true", help="첫 승차 대기를 실시간 없이 정적 배차로만")
-    q.add_argument("--c-points", type=int, default=anchors.C_POINTS, help="C: 다시 찾을 정류장 수")
-    q.add_argument("--c-anchors", type=int, default=anchors.C_ANCHORS, help="C: 정류장마다 확인할 앵커 수")
     q.set_defaults(func=cmd_plan)
 
     c = sub.add_parser("calibrate", help="택시 시간·요금 근사 보정")
