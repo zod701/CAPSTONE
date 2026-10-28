@@ -12,6 +12,8 @@
 
 카카오는 호출자가 넘기는 `api`(`car(출발, 도착)` · `transit(출발, 도착)`)로만 부른다 — 실패하면 `QueryUnavailable` 을 던진다.
 """
+import math
+from bisect import bisect_left, bisect_right
 from datetime import timedelta
 
 from geoutil import haversine_m
@@ -21,6 +23,8 @@ from algo.fares import estimate
 from algo.lazy_pareto import Candidate, Cost, LazyParetoSearch
 
 SGG_RADII = (2000.0, 10000.0)   # 좌표가 속한 시군을 가장 가까운 정류소로 본다 (택시 요금 유형·시계외)
+# 직행 노선 끝점을 찾는 택시 창의 중심 간격. 반경에 같은 만큼 더하므로 솎아 낸 정류소에서 닿는 곳도 빠지지 않는다
+CORRIDOR_STEP_M = 2000.0
 
 
 def xy(point):
@@ -101,6 +105,18 @@ def route_tails(routes, d, stops, *, vot, at=None):
     return list(best.values())
 
 
+def corridor(o, d, routes):
+    """택시 창의 중심 — 출발지 · 목적지 · 기준 경로 위 모든 정류소를 CORRIDOR_STEP_M 간격으로 솎은 점들.
+
+    앞·뒤 부분의 끝(u·v)은 거의 이 위에 있다. 직행 노선 끝점은 여기서 택시 30분 안이어야 짝이 될 수 있다.
+    """
+    kept = []
+    for pt in [o, d] + [(p["lon"], p["lat"]) for r in routes for p in anchors.route_points(r, o)]:
+        if all(haversine_m(*pt, *k) >= CORRIDOR_STEP_M for k in kept):
+            kept.append(pt)
+    return kept
+
+
 def line_parts(ends, o, d, side, *, at=None):
     """`direct_ends` 의 끝점 → 앞부분(side="head") 또는 뒷부분(side="tail"). 검증할 때 그 구간의 대중교통을 부른다."""
     out = []
@@ -114,21 +130,33 @@ def line_parts(ends, o, d, side, *, at=None):
 
 
 def pair(heads, tails, *, vot, baseline_s, at=None, t_max_s=anchors.T_MAX_S):
-    """앞부분 × 뒷부분 → (후보, 진단). 택시 구간이 짧거나(직선 1.1 km 미만) 30분을 넘거나, ETA 가 0 이어도 기준선보다
+    """앞부분 × 뒷부분 → (후보, 진단). 택시 구간이 걷기보다 느리거나(직선 약 258 m 미만) 30분을 넘거나, ETA 가 0 이어도 기준선보다
     5분 빨라질 수 없는 짝은 뺀다. 택시 요금 유형·심야는 택시를 타는 곳과 그 시각으로 정한다."""
     diag, out = {"too_close": 0, "too_far": 0, "no_saving": 0}, []
     limit = baseline_s - anchors.TAXI_MIN_SAVING_S
+    # 뒷부분을 경도순으로 두고, 택시 도달 거리 안에 들 수 있는 경도 폭만 본다 — 그 밖은 직선으로도 30분 밖이다
+    reach = anchors.taxi_reach_m(t_max_s, at)   # 택시 시간 기울기는 요청 시각의 시간대로 고른다
+    tails = sorted(tails, key=lambda t: t["point"]["lon"])
+    lons = [t["point"]["lon"] for t in tails]
     for h in heads:
         u = xy(h["point"])
-        for t in tails:
+        lat = min(89.0, abs(u[1]) + math.degrees(reach / 6371000.0))   # 폭이 가장 넓어지는 위도로 잡아 빠뜨리지 않는다
+        dlon = math.degrees(reach / (6371000.0 * math.cos(math.radians(lat))))
+        dlat = math.degrees(reach / 6371000.0)
+        lo, hi = bisect_left(lons, u[0] - dlon), bisect_right(lons, u[0] + dlon)
+        diag["too_far"] += len(tails) - (hi - lo)
+        for t in tails[lo:hi]:
             if h["source"] == "origin" and t["source"] == "destination":
                 continue   # 전 구간 택시는 하이브리드가 아니다
             v = xy(t["point"])
+            if abs(v[1] - u[1]) > dlat:
+                diag["too_far"] += 1
+                continue
             straight = haversine_m(*u, *v)
             if straight < anchors.TAXI_MIN_M:
                 diag["too_close"] += 1
                 continue
-            eta = anchors.taxi_time_s(*u, *v)
+            eta = anchors.taxi_s_for(straight, at)
             if eta > t_max_s:
                 diag["too_far"] += 1
                 continue
@@ -138,7 +166,7 @@ def pair(heads, tails, *, vot, baseline_s, at=None, t_max_s=anchors.T_MAX_S):
                 continue
             taxi_s = anchors.taxi_plan_s(eta, connect)
             at_u = at + timedelta(seconds=h["time_s"]) if at is not None else None
-            taxi_fare = anchors.taxi_fare(anchors.taxi_dist_km(*u, *v), h["point"].get("sgg_nm"),
+            taxi_fare = anchors.taxi_fare(anchors.road_km(straight), h["point"].get("sgg_nm"),
                                           t["point"].get("sgg_nm"), at_u)
             time_s = h["time_s"] + taxi_s + t["time_s"]
             fare = taxi_fare + h["fare"] + t["fare"]
@@ -162,7 +190,9 @@ def propose(stops, routes, lines, o, d, head_routes, tail_routes, *, vot, baseli
     사본이, 택시로 닿아 타는 뒷부분은 배차 추정 경로가 맞다. 둘은 같은 경로를 같은 순서로 담는다.
     """
     sgg_o, sgg_d = sgg_at(stops, o), sgg_at(stops, d)
-    common = dict(vot=vot, at=at, headway=headway, phys=phys, hours=hours, t_max_s=t_max_s)
+    window = corridor(o, d, head_routes)
+    common = dict(vot=vot, at=at, headway=headway, phys=phys, hours=hours, t_max_s=t_max_s,
+                  taxi_points=window, taxi_slack_m=CORRIDOR_STEP_M)
     head_ends, head_diag = anchors.direct_ends(stops, routes, lines, o, d, side="head", **common)
     tail_ends, tail_diag = anchors.direct_ends(stops, routes, lines, o, d, side="tail", **common)
     by_route, skipped = route_heads(head_routes, o, stops, vot=vot, at=at)
@@ -174,7 +204,8 @@ def propose(stops, routes, lines, o, d, head_routes, tail_routes, *, vot, baseli
              + route_tails(tail_routes, d, stops, vot=vot, at=at) + line_parts(tail_ends, o, d, "tail", at=at))
     cands, pair_diag = pair(heads, tails, vot=vot, baseline_s=baseline_s, at=at, t_max_s=t_max_s)
     count = lambda parts, src: sum(p["source"] == src for p in parts)   # noqa: E731
-    return cands, {"heads": {"route": count(heads, "route"), "line": count(heads, "line"), "skipped_routes": skipped},
+    return cands, {"corridor": len(window),
+                   "heads": {"route": count(heads, "route"), "line": count(heads, "line"), "skipped_routes": skipped},
                    "tails": {"route": count(tails, "route"), "line": count(tails, "line")},
                    "pairs": pair_diag, "line_head": head_diag, "line_tail": tail_diag}
 

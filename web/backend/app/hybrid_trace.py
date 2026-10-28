@@ -109,6 +109,7 @@ class HybridTrace:
                             geometry=_geometry(vsteps, connector, self.origin, self.destination, self.group_color))
         return {"id": cand["id"], "name": "%s → %s" % (u["name"], v["name"]), "shape": _shape(cand),
                 "estimated_score": cand["fare"] + cand["time_s"] / 60 * self.vot,
+                "estimated": {"time_s": cand["time_s"], "fare": cand["fare"]},
                 "connector": connector,
                 "anchors": [{"id": p["point"]["id"], "name": p["point"]["name"], "lon": p["point"]["lon"],
                              "lat": p["point"]["lat"]} for p in (h, t) if p["source"] not in ("origin", "destination")],

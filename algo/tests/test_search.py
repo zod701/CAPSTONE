@@ -68,7 +68,7 @@ def test_the_four_old_shapes_are_all_pairs_of_one_rule():
 
 
 def test_full_taxi_and_short_taxi_are_not_hybrids():
-    near = stop("n", 127.017, 37.3065)            # 출발지에서 약 720 m
+    near = stop("n", 127.017, 37.3018)            # 출발지에서 약 200 m — 걷는 편이 빠르다
     route = {**ROUTE, "steps": [ride(O, near, 300), ride(near, D, 3000)]}
     heads, tails = parts(route)
     cands, diag = search.pair(heads, tails, vot=VOT, baseline_s=100000, at=DAY)
@@ -159,3 +159,12 @@ def test_run_stops_at_the_query_budget():
     found, run = asyncio.run(search.run(cands, {"T0": search.Cost(5160, 1650)}, api, OP, DP, vot=VOT,
                                         baseline_s=5160, at=DAY, budget=2, parallel=3))
     assert len(api.calls) == len(run.query_order) <= 2 and found
+
+
+def test_corridor_keeps_origin_destination_and_thins_route_stops():
+    pts = search.corridor(OP, DP, [ROUTE])
+    assert pts[:2] == [OP, DP]
+    assert all(search.haversine_m(*a, *b) >= search.CORRIDOR_STEP_M for i, a in enumerate(pts) for b in pts[:i])
+    # 솎아 낸 정류소는 남은 중심 중 하나에서 간격 안이다
+    assert all(min(search.haversine_m(*xy, *k) for k in pts) < search.CORRIDOR_STEP_M
+               for xy in [(p["lon"], p["lat"]) for p in anchors.route_points(ROUTE, OP)])

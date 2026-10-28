@@ -861,6 +861,10 @@ details.fold > summary { margin: 10px 0 4px; font-size: 12px; font-weight: 600; 
 .debug-table-wrap td:first-child { text-align: left; min-width: 85px; }
 .debug-selected { outline: 1px solid var(--accent); outline-offset: -1px; }
 .debug-warning { color: var(--accent); }
+.debug-chart { display: block; width: 100%; height: auto; font-size: 9px; fill: currentColor; }
+.debug-chart .grid { stroke: var(--border); }
+.debug-chart circle { cursor: pointer; }
+.debug-legend span { white-space: nowrap; margin-right: 6px; }
 #developer-tools > section:not(#hybrid-debug) { padding-left: 28px; }
 @media (max-width: 720px) {
   body.panel-dragging #sidebar {

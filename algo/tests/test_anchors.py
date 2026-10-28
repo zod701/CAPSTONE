@@ -37,6 +37,21 @@ def test_reach_is_zero_below_the_fixed_part():
     assert taxi_reach_m(TAXI_BASE_S / 2) == 0.0
 
 
+def test_slope_follows_time_band():
+    # 2026-10-28(수) 기준 — 평일 출퇴근은 느리고, 심야는 빠르고, 주말 같은 시각은 평시다
+    from algo.anchors import taxi_band
+    bands = {h: taxi_band(datetime(2026, 10, 28, h, m)) for h, m in ((8, 18), (13, 34), (18, 43), (19, 37), (23, 47), (3, 0))}
+    assert bands == {8: "peak", 13: "normal", 18: "peak", 19: "normal", 23: "night", 3: "night"}
+    assert taxi_band(datetime(2026, 10, 31, 8, 18)) == "normal"   # 토요일
+    assert taxi_band(None) == "normal"
+    far = move(BASE, 4000, 0)
+    times = [taxi_time_s(*BASE, *far, datetime(2026, 10, 28, h, m)) for h, m in ((23, 47), (13, 34), (8, 18))]
+    assert times == sorted(times) and len(set(times)) == 3
+    t = 20 * 60
+    for at in (datetime(2026, 10, 28, 8, 18), datetime(2026, 10, 28, 23, 47)):
+        assert taxi_time_s(*BASE, *move(BASE, taxi_reach_m(t, at), 0), at) == pytest.approx(t, rel=1e-6)
+
+
 def test_time_grows_with_distance():
     near, far = move(BASE, 1000, 0), move(BASE, 3000, 0)
     assert taxi_time_s(*BASE, *near) < taxi_time_s(*BASE, *far)
@@ -114,6 +129,7 @@ def test_taxi_plan_is_pickup_plus_eta_plus_buffer_when_connecting():
 
 
 def test_taxi_minimum_distance_is_the_base_fare_distance_in_straight_line():
-    from algo.anchors import DETOUR, TAXI_MIN_M
-    # 표준형 택시 기본거리 1.6 km(도로)를 우회계수로 나눈 직선거리 — 약 1.1 km
-    assert TAXI_MIN_M == pytest.approx(1600 / DETOUR) and 1100 < TAXI_MIN_M < 1150
+    from algo.anchors import TAXI_MIN_M, taxi_plan_s, taxi_s_for, walk_s
+    # 택시(호출 대기 + 이동 + 연결 버퍼)가 걷기보다 빨라지는 직선거리 — 약 258 m
+    assert taxi_plan_s(taxi_s_for(TAXI_MIN_M)) == pytest.approx(walk_s(TAXI_MIN_M)) and 250 < TAXI_MIN_M < 270
+    assert walk_s(TAXI_MIN_M - 10) < taxi_plan_s(taxi_s_for(TAXI_MIN_M - 10))

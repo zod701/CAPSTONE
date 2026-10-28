@@ -54,6 +54,8 @@ def test_stage_counts_are_consistent():
     assert payload["stages"][STAGES.index("경로 검증")]["removed"] == 2
     assert payload["stages"][-1]["remaining"] == 1
     assert payload["candidates"][0]["result_index"] == 0
+    assert payload["candidates"][0]["estimated"] == {"time_s": 600.0, "fare": 5000.0}
+    assert payload["candidates"][0]["verified"]["time_s"] == 400
     for stage in payload["stages"]:
         assert stage["entered"] == stage["removed"] + stage["remaining"]
 

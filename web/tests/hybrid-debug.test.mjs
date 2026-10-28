@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-import { stageState, comparisonCandidates, createHybridDebug } from '../frontend/js/hybrid-debug.js';
+import { stageState, comparisonCandidates, createHybridDebug, paretoFront, chartPoints } from '../frontend/js/hybrid-debug.js';
 
 test('shared route style distinguishes trunk buses and Bundang rail', () => {
   const source = readFileSync(new URL('../frontend/js/routes.js', import.meta.url), 'utf8');
@@ -78,10 +78,8 @@ test('anchor markers open stop information without bubbling into address lookup'
       () => ({ color: '#3D5BAB' }));
     view.enable(true);
     view.setTrace({ vot: 500, baseline: {}, generation: {}, origin: [127, 37], destination: [128, 38],
-      buffers: { head: { bus: [{ center: [127, 37], radius_m: 400, mode: 'walk' },
-        { center: [128, 38], radius_m: 8790, mode: 'taxi' }] },
-        tail: { bus: [{ center: [127, 37], radius_m: 8790, mode: 'taxi' },
-          { center: [128, 38], radius_m: 800, mode: 'walk' }] } }, verify_stage: 1,
+      buffers: { head: { bus: [{ center: [127, 37], radius_m: 400, mode: 'walk' }] },
+        tail: { bus: [{ center: [128, 38], radius_m: 800, mode: 'walk' }] } }, verify_stage: 1,
       stages: [{ name: '후보 생성', entered: 1, removed: 0, remaining: 1 }, { name: '다음', remaining: 1 }],
       candidates: [{ id: 'c1', name: '정류장', stage: 1, shape: '기준 경로 → 목적지',
         connector: [[127.1, 37.1], [128, 38]], anchors: [anchor], geometry: [
@@ -93,7 +91,7 @@ test('anchor markers open stop information without bubbling into address lookup'
     assert.deepEqual(marker.points, [37.1, 127.1]);
     assert.equal(marker.options.bubblingMouseEvents, false);
     assert.equal(shapes.find(s => s.options.weight === 3).options.bubblingMouseEvents, false);
-    assert.deepEqual(shapes.filter(s => s.options.radius > 10).map(s => s.options.radius), [400, 8790]);
+    assert.deepEqual(shapes.filter(s => s.options.radius > 10).map(s => s.options.radius), [400]);
     marker.handlers.click();
     assert.equal(opened, anchor);
     assert.equal(cleared, 1);
@@ -102,7 +100,7 @@ test('anchor markers open stop information without bubbling into address lookup'
       [[37, 127], [37.05, 127.05]], [[37.05, 127.05], [37.1, 127.1]], [[37.1, 127.1], [38, 128]],
     ]);
     controls['[data-side]'].change({ target: { value: 'tail' } });
-    assert.deepEqual(shapes.filter(s => s.options.radius > 10).map(s => s.options.radius), [8790, 800]);
+    assert.deepEqual(shapes.filter(s => s.options.radius > 10).map(s => s.options.radius), [800]);
     next.click();
     assert.equal(shapes.filter(s => s.options.radius > 10).length, 0);
   } finally { globalThis.L = previous; }
@@ -117,4 +115,21 @@ test('table includes all survivors, excludes current removals, and sorts by stag
   assert.deepEqual(comparisonCandidates(items, 2, 6, 3).map(c => c.id), ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7']);
   assert.deepEqual(comparisonCandidates(items, 3, 6, 3).map(c => c.id), ['c7', 'c6', 'c5', 'c4', 'c3', 'c2', 'c1', 'c0']);
   assert.equal(comparisonCandidates([], 6, 6, 3).length, 0);
+});
+
+test('chart plots estimates before verification, verified values after, and skips past candidates', () => {
+  const items = [
+    { id: 'a', stage: 4, estimated: { time_s: 600, fare: 9000 }, verified: { time_s: 660, fare: 9500 } },
+    { id: 'b', stage: 2, estimated: { time_s: 700, fare: 8000 }, verified: null },
+    { id: 'c', stage: 0, estimated: { time_s: 800, fare: 7000 } },
+  ];
+  assert.deepEqual(chartPoints(items, 1, 4, 2).map(p => [p.id, p.status, p.time_s]), [['a', 'kept', 600], ['b', 'kept', 700]]);
+  // 검증 단계에서 제외된 b 는 확인값이 없어 점이 없다
+  assert.deepEqual(chartPoints(items, 2, 4, 2).map(p => [p.id, p.time_s]), [['a', 660]]);
+});
+
+test('pareto front keeps only points no other point beats on both time and fare', () => {
+  const points = [{ id: 'slow-cheap', time_s: 900, fare: 3000 }, { id: 'fast', time_s: 600, fare: 9000 },
+    { id: 'worse', time_s: 800, fare: 9500 }, { id: 'middle', time_s: 700, fare: 6000 }, { id: 'tie', time_s: 700, fare: 6500 }];
+  assert.deepEqual(paretoFront(points).map(p => p.id), ['fast', 'middle', 'slow-cheap']);
 });

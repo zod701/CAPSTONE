@@ -2,7 +2,7 @@ import { esc } from './api.js';
 
 const SIDES = { head: '출발지에서 걸어 타는 직행 노선', tail: '목적지로 곧장 가는 직행 노선' };
 const EXPLANATIONS = [
-  '모든 후보는 출발지 → (대중교통) → u → 택시 1회 → v → (대중교통) → 목적지 꼴입니다. u는 출발지·기준 경로에서 내리는 정류소·걸어 타는 직행 노선의 하차 지점, v는 목적지·기준 경로의 승차 지점·목적지로 가는 직행 노선의 승차 지점이며 그 모든 짝을 만듭니다. 택시 직선 1.1 km 미만, 30분 초과, 택시가 0분이어도 5분을 줄일 수 없는 짝은 만들지 않습니다.',
+  '모든 후보는 출발지 → (대중교통) → u → 택시 1회 → v → (대중교통) → 목적지 꼴입니다. u는 출발지·기준 경로에서 내리는 정류소·걸어 타는 직행 노선의 하차 지점, v는 목적지·기준 경로의 승차 지점·목적지로 가는 직행 노선의 승차 지점이며 그 모든 짝을 만듭니다. 택시가 걷기보다 느린 짝(직선 약 258 m 미만), 30분 초과, 택시가 0분이어도 5분을 줄일 수 없는 짝은 만들지 않습니다.',
   '확인한 결과의 시간·요금 Pareto를 보며 다음에 확인할 후보를 고릅니다. 추천 점수를 낮출 것으로 추정되는 후보, 없으면 아직 없는 절충안을 채울 후보가 먼저입니다. 질의 예산을 다 쓰면 나머지는 확인하지 않습니다. 이미 확인한 경로가 후보의 하한보다 빠르고 싸면 확인하지 않습니다.',
   '선택된 후보의 실제 자동차·대중교통 경로를 카카오맵 API로 조회합니다. 같은 질의를 쓰는 후보는 응답을 나눠 씁니다.',
   '최소시간 대중교통보다 5분 이상 빨라야 합니다. 요금이 저렴해도 이 조건을 통과하지 못하면 제외합니다.',
@@ -21,6 +21,66 @@ export function comparisonCandidates(candidates, step, last, verify) {
   const score = c => step >= verify ? c.verified?.score ?? Infinity : c.estimated_score ?? Infinity;
   return candidates.filter(c => stageState(c, step, last) === 'kept')
     .sort((a, b) => score(a) - score(b));
+}
+
+// 시간·요금 모두 더 나은 점이 없는 점 — 시간순으로 훑으며 요금이 내려갈 때만 남긴다
+export function paretoFront(points) {
+  const front = [];
+  for (const p of [...points].sort((a, b) => a.time_s - b.time_s || a.fare - b.fare)) {
+    if (!front.length || p.fare < front[front.length - 1].fare) front.push(p);
+  }
+  return front;
+}
+
+// 현재 단계에서 지도에 보이는 후보를 점으로 — 검증 전에는 추정값, 검증 단계부터는 실제 조회값
+export function chartPoints(candidates, step, last, verify) {
+  return candidates.flatMap(c => {
+    const status = stageState(c, step, last);
+    const value = step >= verify ? c.verified : c.estimated;
+    if (status === 'past' || !Number.isFinite(value?.time_s) || !Number.isFinite(value?.fare)) return [];
+    return [{ id: c.id, name: c.name, status, time_s: value.time_s, fare: value.fare }];
+  });
+}
+
+function ticks(min, max) {
+  const raw = (max - min) / 4;
+  const unit = 10 ** Math.floor(Math.log10(raw));
+  const size = [1, 2, 5, 10].map(m => m * unit).find(s => s >= raw);
+  const out = [];
+  for (let v = Math.ceil(min / size) * size; v <= max; v += size) out.push(v);
+  return out;
+}
+
+function paretoChart(points, baseline, selected, colors, vot) {
+  const base = { id: null, time_s: baseline.time_s, fare: baseline.fare, status: 'kept' };
+  const all = Number.isFinite(base.time_s) && Number.isFinite(base.fare) ? [...points, base] : points;
+  if (!points.length) return '<p class="muted">이 단계에 그릴 경로가 없습니다.</p>';
+  const W = 320, H = 220, left = 52, right = 10, top = 10, bottom = 32;
+  const xs = all.map(p => p.time_s / 60), ys = all.map(p => p.fare);
+  const pad = (lo, hi) => { const d = (hi - lo) * 0.06 || Math.max(Math.abs(hi) * 0.1, 1); return [lo - d, hi + d]; };
+  const [x0, x1] = pad(Math.min(...xs), Math.max(...xs)), [y0, y1] = pad(Math.min(...ys), Math.max(...ys));
+  const X = m => left + (m - x0) / (x1 - x0) * (W - left - right);
+  const Y = f => H - bottom - (f - y0) / (y1 - y0) * (H - top - bottom);
+  const front = paretoFront(all.filter(p => p.status === 'kept'));
+  // 내부 점수가 가장 낮은 유지 경로를 지나는 등점수선 — 요금 = 점수 − 분 × VOT. 이 선 아래가 더 유리하다
+  const best = Math.min(...front.map(p => p.fare + p.time_s / 60 * vot));
+  const iso = Number.isFinite(best) ? `<line x1="${X(x0)}" y1="${Y(best - x0 * vot)}" x2="${X(x1)}" y2="${Y(best - x1 * vot)}"
+    stroke="#9455c6" stroke-width="1.5" stroke-dasharray="5 4" clip-path="url(#debug-chart-area)"/>` : '';
+  const stair = front.map((p, i) => `${i ? `H${X(p.time_s / 60)}` : `M${X(p.time_s / 60)},${Y(p.fare)}`}V${Y(p.fare)}`).join('')
+    + (front.length ? `H${W - right}` : '');
+  const grid = ticks(x0, x1).map(t => `<line x1="${X(t)}" x2="${X(t)}" y1="${top}" y2="${H - bottom}" class="grid"/><text x="${X(t)}" y="${H - bottom + 14}" text-anchor="middle">${Math.round(t)}</text>`).join('')
+    + ticks(y0, y1).map(t => `<line x1="${left}" x2="${W - right}" y1="${Y(t)}" y2="${Y(t)}" class="grid"/><text x="${left - 4}" y="${Y(t) + 3}" text-anchor="end">${num(t)}</text>`).join('');
+  // 선택한 후보는 맨 위에 그린다
+  const order = [...points].sort((a, b) => (a.id === selected) - (b.id === selected));
+  const dots = order.map(p => `<circle data-point="${esc(p.id)}" cx="${X(p.time_s / 60)}" cy="${Y(p.fare)}" r="${p.id === selected ? 6 : 3.5}"
+    fill="${colors[p.status]}" fill-opacity="${p.id === selected ? 1 : 0.6}" stroke="${p.id === selected ? 'currentColor' : 'none'}" stroke-width="2"><title>${esc(p.id)} · ${esc(p.name)} · ${minutes(p.time_s)} · ${num(p.fare)}원</title></circle>`).join('');
+  const baseDot = all.includes(base) ? `<rect x="${X(base.time_s / 60) - 5}" y="${Y(base.fare) - 5}" width="10" height="10" fill="#2474db"><title>기준 대중교통 · ${minutes(base.time_s)} · ${num(base.fare)}원</title></rect>` : '';
+  return `<svg class="debug-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="후보 경로의 시간·요금 분포">
+    <clipPath id="debug-chart-area"><rect x="${left}" y="${top}" width="${W - left - right}" height="${H - top - bottom}"/></clipPath>
+    ${grid}${iso}<path d="${stair}" fill="none" stroke="#e5a000" stroke-width="2"/>${dots}${baseDot}
+    <text x="${(left + W - right) / 2}" y="${H - 4}" text-anchor="middle">시간(분)</text>
+    <text transform="translate(11 ${(top + H - bottom) / 2}) rotate(-90)" text-anchor="middle">요금(원)</text></svg>
+    <p class="debug-legend"><span style="color:${colors.kept}">● 유지</span> <span style="color:${colors.removed}">● 이 단계에서 제외</span> <span style="color:#2474db">■ 기준 대중교통</span> <span style="color:#e5a000">— 유지 경로의 Pareto 경계</span> <span style="color:#9455c6">┅ VOT ${num(vot)}원/분 등점수선</span></p>`;
 }
 
 export function createHybridDebug(el, map, onSelectResult, onAnchorClick, onSelectCandidate, transitStyle) {
@@ -50,7 +110,7 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick, onSele
     if (step === 0) {
       for (const buffer of trace.buffers?.[side]?.[bufferKind] || []) {
         const circle = L.circle([buffer.center[1], buffer.center[0]], {
-          renderer, radius: buffer.radius_m, color: buffer.mode === 'taxi' ? '#2474db' : '#9455c6',
+          renderer, radius: buffer.radius_m, color: '#9455c6',
           weight: 2, fillOpacity: 0.06, dashArray: '6 5', interactive: false,
         }).addTo(layer);
         const box = circle.getBounds();
@@ -119,6 +179,8 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick, onSele
       <p>${EXPLANATIONS[step]}</p>
       ${step === 0 ? `<div class="debug-controls"><label>탐색 반경 <select data-side>${Object.entries(SIDES).map(([k, name]) => `<option value="${k}" ${side === k ? 'selected' : ''}>${name}</option>`).join('')}</select></label><label>정류장 종류 <select data-buffer-kind><option value="bus" ${bufferKind === 'bus' ? 'selected' : ''}>버스</option><option value="subway" ${bufferKind === 'subway' ? 'selected' : ''}>지하철</option></select></label></div>` : ''}
       <p class="debug-count">들어온 후보 ${stage.entered} → 제외 ${stage.removed} → 남은 후보 ${stage.remaining}</p>
+      <p>시간·요금 분포 — ${step >= verify ? '카카오로 확인한 값' : '확인 전 추정값'}. 점을 누르면 그 후보를 고릅니다.</p>
+      ${paretoChart(chartPoints(trace.candidates, step, last, verify), trace.baseline, selected, colors, trace.vot)}
       ${trace.omitted ? `<p class="debug-warning">후보 ${num(trace.total)}개 중 확인을 시도한 후보와 추정 점수 상위 ${trace.limit}개만 표·지도에 표시합니다. 단계 집계에는 전체 후보가 포함됩니다.</p>` : ''}
       <label>후보 선택 <select data-candidate><option value="">점수 상위 후보 보기</option>${trace.candidates.map(c => `<option value="${c.id}" ${selected === c.id ? 'selected' : ''}>${c.id} · ${esc(c.shape)} · ${esc(c.name)}${c.result_index != null ? ' · 최종 생존' : ''}</option>`).join('')}</select></label>
       ${chosen ? `<div class="debug-detail"><b>${esc(chosen.id)} · ${esc(chosen.name)}</b><p>${esc(chosen.shape)} · 택시 1회</p>
@@ -140,6 +202,7 @@ export function createHybridDebug(el, map, onSelectResult, onAnchorClick, onSele
       selectCandidate(b.dataset.related);
       el.querySelector('.debug-table-wrap').scrollTop = scrollTop;
     }));
+    el.querySelectorAll('[data-point]').forEach(p => p.addEventListener('click', () => selectCandidate(p.dataset.point)));
     el.querySelector('[data-result]')?.addEventListener('click', e => { showMap = false; render(); onSelectResult(Number(e.target.dataset.result)); });
     paintMap();
   }

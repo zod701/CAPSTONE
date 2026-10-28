@@ -321,9 +321,9 @@ def _time_errors(rows, detour, speed):
     return [(r["straight_m"] * detour / 1000 / speed * 3600 - r["dur_s"]) / 60 for r in rows]
 
 
-def _model_errors(rows):
-    """현재 `anchors` 택시 시간 모형의 오차 (분)."""
-    return [(anchors.TAXI_BASE_S + r["straight_m"] / 1000 * anchors.TAXI_S_PER_KM - r["dur_s"]) / 60 for r in rows]
+def _model_errors(rows, now):
+    """현재 `anchors` 택시 시간 모형(그 시각의 시간대 기울기)의 오차 (분)."""
+    return [(anchors.taxi_s_for(r["straight_m"], now) - r["dur_s"]) / 60 for r in rows]
 
 
 def _line(label, errs):
@@ -350,9 +350,14 @@ def _calibration_report(rows, now):
     print("  우회계수(도로/직선) 중앙 %.3f · 도로 평균속도 중앙 %.1f km/h · 직선 1 km 당 %.0f초"
           % (detour, road_speed, sec_per_km))
 
-    print("\n택시 시간 — 현재 %.0f초 + %.0f초/km  vs  원점 모형 DETOUR=%.2f · SPEED=%.1f km/h"
-          % (anchors.TAXI_BASE_S, anchors.TAXI_S_PER_KM, detour, speed))
-    print(_line("현재 모형", _model_errors(rows)))
+    band = anchors.taxi_band(now)
+    print("\n택시 시간 — 현재 %.0f초 + %.0f초/km(%s)  vs  원점 모형 DETOUR=%.2f · SPEED=%.1f km/h"
+          % (anchors.TAXI_BASE_S, anchors.TAXI_S_PER_KM[band], band, detour, speed))
+    print(_line("현재 모형", _model_errors(rows, now)))
+    # 고정분은 시간대와 무관하게 두고 기울기만 맞춘다 — 직선 1 km 당 (응답 − 고정분)의 중앙값
+    per_km = _quantile([(r["dur_s"] - anchors.TAXI_BASE_S) / (r["straight_m"] / 1000) for r in rows], 0.5)
+    print(_line("기울기만 재적합 %.0f/km" % per_km,
+                [(anchors.TAXI_BASE_S + r["straight_m"] / 1000 * per_km - r["dur_s"]) / 60 for r in rows]))
     print(_line("원점 모형", _time_errors(rows, detour, speed)))
     # 절편 모형 — 짧은 구간에서 근사가 빠르고 긴 구간에서 느리면 출발·신호 같은 고정 비용이 있다는 뜻이다
     xs = [r["straight_m"] / 1000 for r in rows]
@@ -367,7 +372,7 @@ def _calibration_report(rows, now):
     for lo, hi in ((1, 3), (3, 6), (6, 12)):
         part = [r for r in rows if lo * 1000 <= r["straight_m"] < hi * 1000]
         if len(part) >= 5:
-            print(_line("  직선 %d–%d km (%d)" % (lo, hi, len(part)), _model_errors(part)))
+            print(_line("  직선 %d–%d km (%d)" % (lo, hi, len(part)), _model_errors(part, now)))
 
     fared = [r for r in rows if r["taxi"]]
     if fared:

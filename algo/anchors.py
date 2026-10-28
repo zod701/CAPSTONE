@@ -34,8 +34,12 @@ from algo.fares import estimate as estimate_fare
 # 범위 — 의 자동차 경로 응답에 맞췄다. 절대오차 중앙 2.4분 · p90 6.6분 (원점 모형 2.9 · 7.7분, 처음 둔 상식값
 # 1.35 · 30 km/h 는 편향 −5.0분으로 택시를 빠르게 봐 택시를 오래 타는 앵커가 부당하게 유리했다) → method.md E18.
 # `cli.py calibrate` 로 다시 잴 수 있다.
+# 기울기는 시간대마다 다르다 — 같은 표본을 출근(08:18)·낮(13:34)·퇴근(18:43)·심야(23:47)에 다시 재니 고정분은 그대로 두고
+# 기울기만 바꾸면 맞았다(출퇴근 편향 −3.3·−3.2분, 심야 +2.7분을 직선 중앙 4.2 km 로 나눠 기울기에 더했다) → method.md E23.
 TAXI_BASE_S = 236.0
-TAXI_S_PER_KM = 178.0
+TAXI_S_PER_KM = {"peak": 225.0, "normal": 178.0, "night": 140.0}
+PEAK_HOURS = ((7.0, 10.0), (17.0, 19.5))   # 평일 출퇴근 — 19:37(월)은 평시 기울기와 맞았다
+NIGHT_HOURS = (22.0, 6.0)                   # 22시부터 다음 날 6시 전까지
 # 요금 거리(도로 km)를 직선에서 추정하는 우회계수 — 같은 표본의 도로/직선 중앙값
 DETOUR = 1.42
 
@@ -62,20 +66,42 @@ JOINT_ZONES = (frozenset({"화성시", "오산시"}),
 
 def taxi_dist_km(lon1, lat1, lon2, lat2):
     """직선거리에 우회계수를 곱한 도로 거리 근사 (km)."""
-    return haversine_m(lon1, lat1, lon2, lat2) * DETOUR / 1000.0
+    return road_km(haversine_m(lon1, lat1, lon2, lat2))
 
 
-def taxi_time_s(lon1, lat1, lon2, lat2):
+def taxi_time_s(lon1, lat1, lon2, lat2, at=None):
     """택시 소요 시간 근사 (초) — 고정 비용 + 직선거리 비례."""
-    return TAXI_BASE_S + haversine_m(lon1, lat1, lon2, lat2) / 1000.0 * TAXI_S_PER_KM
+    return taxi_s_for(haversine_m(lon1, lat1, lon2, lat2), at)
 
 
-def taxi_reach_m(t_max_s):
-    """t_max_s 안에 닿는 **직선거리** 상한 (m) — `taxi_time_s` 의 역함수.
+def road_km(straight_m):
+    """직선거리(m) → 도로 거리 근사(km). 직선거리를 이미 잰 곳(후보 짝 짓기)이 다시 재지 않게 따로 둔다."""
+    return straight_m * DETOUR / 1000.0
+
+
+def taxi_band(at):
+    """택시 시간 기울기의 시간대 — 'peak'(평일 출퇴근) · 'night'(22–6시) · 'normal'. 시각을 모르면 'normal'."""
+    if at is None:
+        return "normal"
+    h = at.hour + at.minute / 60.0
+    if h >= NIGHT_HOURS[0] or h < NIGHT_HOURS[1]:
+        return "night"
+    if day_type(at) == WEEKDAY and any(start <= h < end for start, end in PEAK_HOURS):
+        return "peak"
+    return "normal"
+
+
+def taxi_s_for(straight_m, at=None):
+    """직선거리(m) → 택시 소요 시간 근사(초). 기울기는 택시를 타는 시각의 시간대로 고른다."""
+    return TAXI_BASE_S + straight_m / 1000.0 * TAXI_S_PER_KM[taxi_band(at)]
+
+
+def taxi_reach_m(t_max_s, at=None):
+    """t_max_s 안에 닿는 **직선거리** 상한 (m) — `taxi_s_for` 의 역함수.
 
     반경 검색에 쓴다. 시간과 반경을 각각 상수로 두면 계수를 고칠 때 반드시 어긋나므로 한 곳에서만 계산한다.
     """
-    return max(0.0, t_max_s - TAXI_BASE_S) / TAXI_S_PER_KM * 1000.0
+    return max(0.0, t_max_s - TAXI_BASE_S) / TAXI_S_PER_KM[taxi_band(at)] * 1000.0
 
 
 def _is_seoul(sgg_nm):
@@ -138,9 +164,7 @@ def taxi_fare(km, sgg_from, sgg_to=None, at=None):
 TAXI_PICKUP_S = 90.0
 TAXI_BUFFER_S = 60.0
 # 최소 기준 — 같은 정류장·옆 정류장으로 가는 택시처럼 너무 짧은 거리를 택시로 바꾸는 후보가 섞였다.
-# 거리: 표준형 택시 기본거리 1.6 km(도로)를 직선으로 — 이보다 짧으면 기본요금을 다 내고 걷거나 버스로 갈 거리를 간다.
-# 절약: 택시가 대신한 부분보다 이만큼은 빨라야 한다(호출 대기·버퍼 포함). 대신한 부분을 모르는 후보는 검증 뒤 기준선과 견준다.
-TAXI_MIN_M = FARE_TYPES["표준"][0] * 1000.0 / DETOUR
+# 거리(`TAXI_MIN_M`)는 도보 계수 아래에 둔다. 절약: 기준선보다 이만큼은 빨라야 한다(호출 대기·버퍼 포함).
 TAXI_MIN_SAVING_S = 300.0
 
 
@@ -159,10 +183,12 @@ def taxi_connect_s(eta_s):
 
 # --- 승차 시간 근사 ---
 # 정차를 포함한 표정속도(km/h)다 — 정차 시간을 따로 더하지 않는다. 노선 유형은 순서표의 `route_type`
-# (카카오 버스 유형 이름에 맞춘 값). 기준 경로의 실제 구간 시간과 견주어 고칠 수 있다.
-BUS_KMH = {"마을": 15.0, "순환": 15.0, "지선": 18.0, "일반": 18.0, "간선": 20.0,
-           "광역": 32.0, "직행": 32.0, "시외": 40.0, "공항": 40.0}
-BUS_KMH_DEFAULT = 18.0
+# (카카오 버스 유형 이름에 맞춘 값). 거리는 순서표 정류장 좌표를 이은 직선 합(`_ride_km`)이라 도로보다 짧고, 속도도 그 잣대다.
+# 값은 기준 경로 응답의 버스 구간 273개(2026-10-28, 서울·경기 20 OD)에서 카카오 차내 시간과 같은 구간의 순서표 거리로 잰
+# 유형별 속도 중앙값이다 → method.md E24. 순환·시외·공항은 표본이 없어 순환은 마을과, 시외·공항은 직행·광역과 같은 비율로 낮췄다.
+BUS_KMH = {"마을": 10.0, "순환": 10.0, "지선": 12.0, "일반": 13.0, "간선": 13.0, "심야": 15.0,
+           "광역": 17.0, "직행": 17.0, "시외": 21.0, "공항": 21.0}
+BUS_KMH_DEFAULT = 13.0
 # 후보로 쓰지 않는 노선 유형. 수요응답형(똑버스·DRT)은 앱 호출·예약으로 구역 안을 달리는 버스라 정해진 노선도 배차도 없다 —
 # 순서표 64노선 중 39개는 구역 끝 두 정류장만 적힌 행이고(두 정류장 사이 중앙 190 m), 배차 값은 232행 중 19행뿐이다.
 # 카카오 대중교통 경로에는 나오지 않고(화성똑버스06-2 구역 안 OD 실측) 우리 순서표로만 들어오므로 노선을 모으는 단계에서 뺀다.
@@ -188,6 +214,12 @@ VOT = {"time": 456.0, "balance": 300.0, "cost": 150.0}
 def walk_s(dist_m):
     """직선거리를 도보 시간(초)으로 — 우회율을 곱하고 속도로 나눈다."""
     return dist_m * WALK_DETOUR / WALK_MPS
+
+
+# 택시 최소 거리 — 택시(호출 대기 + 이동 + 연결 버퍼)가 걷기보다 빨라지는 직선거리, 약 258 m. 이보다 짧으면 걷는 편이 빠르다.
+# 표준형 기본거리 1.6 km 를 직선으로 바꾼 1.1 km 로 두었을 때는 마지막 1 km 남짓을 택시로 끝내는 좋은 경로를 만들지 못했다(method.md E22)
+# 평시 기울기로 정한다(출퇴근 기울기면 266 m 로 거의 같다)
+TAXI_MIN_M = (TAXI_PICKUP_S + TAXI_BUFFER_S + TAXI_BASE_S) / (WALK_DETOUR / WALK_MPS - TAXI_S_PER_KM["normal"] / 1000.0)
 
 
 def ride_s(km, route_type=None, kind="bus"):
@@ -334,6 +366,18 @@ def _near(stops, kind, pt, radii, *, radius_used=None):
     return {}
 
 
+def _near_any(stops, kind, points, radius_m):
+    """여러 중심 중 어느 하나의 반경 안 정류소·역 → {id: (행, 가장 가까운 중심까지 거리 m)}."""
+    found = {}
+    for pt in points:
+        for i, dist in stops.near(kind, pt[0], pt[1], radius_m):
+            row = stops.row(kind, i)
+            key = row[ID_COL[kind]]
+            if key not in found or dist < found[key][1]:
+                found[key] = (row, dist)
+    return found
+
+
 def _sgg_at(*near_maps):
     """기준점에서 가장 가까운 정류소의 시군 — 택시 요금 유형과 시계외 판정에 쓴다."""
     best = None
@@ -432,23 +476,25 @@ def _ride(brief_id, name, rtype, p, p_row, q, q_row, n_stops, km, walk_m, kind="
             "fare": fare["value"], "fare_step": step, "fare_info": fare}
 
 
-def direct_ends(stops, routes, lines, o, d, *, side, vot, at=None, headway=None, phys=None, hours=None,
-                t_max_s=T_MAX_S, walk_radius_m=WALK_RADIUS_M):
+def direct_ends(stops, routes, lines, o, d, *, side, taxi_points, vot, at=None, headway=None, phys=None, hours=None,
+                t_max_s=T_MAX_S, taxi_slack_m=0.0, walk_radius_m=WALK_RADIUS_M):
     """직행 노선 끝점 — 노선 하나를 타고 출발지에서 오거나 목적지로 가는 정류소 → (점수 오름차순 끝점, 진단). method.md §3.2·§3.8.
 
-    - `side="head"` — O 근처에서 **걸어서** 타고, D 쪽 택시 반경 안에서 내린다. 내리는 정류소가 택시를 타는 곳(u)이다
-    - `side="tail"` — O 쪽 택시 반경 안에서 타고, D 근처에서 내려 걷는다. 타는 정류소가 택시에서 내리는 곳(v)이다
+    - `side="head"` — O 근처에서 **걸어서** 타고 택시 창 안에서 내린다. 내리는 정류소가 택시를 타는 곳(u)이다
+    - `side="tail"` — 택시 창 안에서 타고 D 근처에서 내려 걷는다. 타는 정류소가 택시에서 내리는 곳(v)이다
     기준 경로에 나오지 않은 노선으로 닿는 곳이라 검증할 때 그 구간의 대중교통을 한 번 부른다.
 
-    두 쪽은 **반경을 맞바꾼 같은 알고리즘**이다. 택시 쪽 끝에 택시 도달 반경을, 걷는 쪽 끝에 도보 반경을 준다.
+    걷는 쪽 끝에는 도보 반경을, 택시 쪽 끝에는 **택시 창** — `taxi_points` 중 어느 하나에서 택시 도달 반경(+ `taxi_slack_m`) 안 — 을 준다.
+    택시 창은 끝점을 찾는 범위일 뿐이고, 택시 30분 조건은 짝을 지을 때 u–v 마다 다시 본다.
     끝점은 **정류소 단위로 묶는다** — 검증 질의가 정류소마다 하나이기 때문이다. 쿼터를 쓰지 않는다.
     """
     day = day_type(at) if at is not None else WEEKDAY
-    reach = (taxi_reach_m(t_max_s),)
-    r_o, r_d = (reach, walk_radius_m) if side == "tail" else (walk_radius_m, reach)
-    used_o, used_d = {}, {}
-    near_o = {k: _near(stops, k, o, r_o, radius_used=used_o) for k in ("bus", "subway")}
-    near_d = {k: _near(stops, k, d, r_d, radius_used=used_d) for k in ("bus", "subway")}
+    reach = taxi_reach_m(t_max_s, at) + taxi_slack_m
+    walk_pt = d if side == "tail" else o
+    used = {}
+    walk = {k: _near(stops, k, walk_pt, walk_radius_m, radius_used=used) for k in ("bus", "subway")}
+    taxi = {k: _near_any(stops, k, taxi_points, reach) for k in ("bus", "subway")}
+    near_o, near_d = (taxi, walk) if side == "tail" else (walk, taxi)
     diag, by_anchor = Counter(), {}
 
     def end_at(kind, key, row):
@@ -496,13 +542,10 @@ def direct_ends(stops, routes, lines, o, d, *, side, vot, at=None, headway=None,
         out.append(end)
     out.sort(key=lambda e: e["score_s"])
     info = dict(diag)   # Counter.update 는 값을 더한다 — 여기서는 덮어써야 한다
-    info.update({"side": side, "ends": len(out),
-                 "buffers": {k: [
-                     {"center": o, "radius_m": used_o[k], "mode": "taxi" if side == "tail" else "walk"},
-                     {"center": d, "radius_m": used_d[k], "mode": "walk" if side == "tail" else "taxi"},
-                 ] for k in ("bus", "subway")},
-                 "near_o_bus": len(near_o["bus"]), "near_d_bus": len(near_d["bus"]),
-                 "near_o_rail": len(near_o["subway"]), "near_d_rail": len(near_d["subway"])})
+    info.update({"side": side, "ends": len(out), "taxi_points": len(taxi_points),
+                 "buffers": {k: [{"center": walk_pt, "radius_m": used[k], "mode": "walk"}] for k in ("bus", "subway")},
+                 "walk_bus": len(walk["bus"]), "walk_rail": len(walk["subway"]),
+                 "taxi_bus": len(taxi["bus"]), "taxi_rail": len(taxi["subway"])})
     return out, info
 
 

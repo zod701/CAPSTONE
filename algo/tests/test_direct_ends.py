@@ -24,7 +24,7 @@ def move(pt, east_m, north_m):
 
 O = (127.0, 37.3)
 D = move(O, 0, 10000)          # 목적지 — 북쪽 10 km
-P = move(O, 1500, 0)           # 출발지 근처 승차 후보 (택시 반경 안, 택시 최소 거리 1.1 km 밖)
+P = move(O, 1500, 0)           # 출발지 근처 승차 후보 (택시 반경 안, 택시 최소 거리 밖)
 P2 = move(O, 2000, 500)
 Q = move(D, 200, 0)            # 목적지 근처 하차 후보 (400 m 반경 안)
 QF = move(D, 1500, 0)          # 목적지에서 택시로 갈 만한 하차 후보 (택시 최소 거리 밖)
@@ -70,6 +70,7 @@ def run(bus=(), sub=(), routes=(), lines=(), hw=None, **kw):
     """기본은 택시에서 내려 타는 쪽(tail) — O 쪽 택시 반경에서 타고 D 근처에서 내린다."""
     kw.setdefault("at", DAY)
     kw.setdefault("side", "tail")
+    kw.setdefault("taxi_points", [O] if kw["side"] == "tail" else [D])   # 택시 창 — 출발지(또는 목적지) 하나
     return direct_ends(StopsDB(bus, sub, LINE_GROUPS), RoutesDB(routes), LinesDB(lines),
                        O, D, vot=300.0, headway=hw, **kw)
 
@@ -315,3 +316,20 @@ def test_demand_responsive_bus_does_not_join_the_frequency_sum():
                            rrow("drt", 2, "q", Q, name="똑버스01", rtype="수요응답")],
                    hw=HeadwayDB([hbus("r1", 20, 20), hbus("drt", 4, 4)]))
     assert [r["id"] for r in cands[0]["rides"]] == ["r1"] and cands[0]["headway_m"] == pytest.approx(20.0)
+
+
+# --- 택시 창 ---
+
+def test_taxi_window_covers_stops_reached_from_any_center():
+    # 출발지에서 택시 30분(직선 약 8.8 km) 밖이라도, 기준 경로 위 다른 중심에서 닿으면 끝점이 된다
+    mid = move(O, 0, 9000)
+    far = move(mid, 1500, 0)                     # 출발지에서 약 9.1 km
+    args = dict(bus=[bstop("far", far), bstop("q", Q)], routes=[rrow("r1", 1, "far", far), rrow("r1", 2, "q", Q)])
+    assert run(taxi_points=[O], **args)[0] == []
+    ends, diag = run(taxi_points=[O, mid], **args)
+    assert [e["anchor"] for e in ends] == ["far"] and diag["taxi_points"] == 2
+
+
+def test_only_the_walking_radius_is_reported_as_a_buffer():
+    _, diag = run(bus=[bstop("p", P), bstop("q", Q)], routes=[rrow("r1", 1, "p", P), rrow("r1", 2, "q", Q)])
+    assert [b["mode"] for b in diag["buffers"]["bus"]] == ["walk"] and diag["buffers"]["bus"][0]["center"] == D
