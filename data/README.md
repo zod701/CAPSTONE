@@ -94,12 +94,17 @@ GTFS 의 **버스** 시각표는 첫차~막차를 대표 배차로 균등 분배
 
 인천 경계와 전국 원본의 ICB 정류소를 병합했다. ICB는 같은 정류소 ID와 기존 거리·이름 검사에 통과하면 GGB·SEB 행에 합치고, 다른 승강장은 `-ICB`로 분리한다. 원본 파일은 보존한다. 인천 소재 역과 인천1·2호선, 자기부상철도 매핑·순서표도 포함한다. 인천1호선 검단 연장 3개 역은 공식 노선도로 확인해 순서표를 보완했다.
 
-인천 버스 도착·노선 API 연동 코드와 노선 수집기를 추가했다. 다만 현재 실제 API는 `HTTP_ERROR(04)`를 반환해
-**인천 자체 노선 데이터 수집과 정상 실시간 응답 검증은 미완료**다. 현재 버스 순서표에는 서울·경기 노선의 인천 구간만 있다.
-필요한 데이터, 실제 API 확인 결과와 검증은 [인천 확장 현황](reports/incheon_scope.md)을 참고한다.
+인천 버스 도착·노선 API 연동 코드와 노선 수집기를 추가했다. 다만 인천시 API는 `HTTP_ERROR(04)`를 반환해
+인천 자체 노선은 **국토교통부 TAGO 버스노선정보**(data.go.kr 15098529, `cityCode=23`)로 받는다(`fetch_incheon_tago.py`, 약 365회 호출).
+같은 열 이름으로 `external/incheon_bus/<날짜>_tago/`에 쓰므로 빌드가 그대로 병합한다. TAGO 정류소 ID는 DB의 ICB ID와 같거나
+첫 자리가 +2 다(368… = ICB 168…, 477… = GGB 257…) — 빌드는 같은 ID가 없으면 첫 자리 −2 로 찾고, 그래도 없으면
+TAGO 의 WGS84 좌표로 넣는다(`in_db=0`). 2026-10-29 수집분: 362 노선 · 26,731 행, 미매칭 0 (DB 밖 신설 정류소 164곳).
+같은 수집기가 노선별 `getRouteInfoIem`(약 362회 더)으로 `info.csv`를 쓰고, `build_headway.py`가 이를 읽어 인천 배차를
+`headway_bus.csv`(`source=incheon`)에 넣는다 — 요일 구분 없는 평일 배차 하나와 첫·막차 한 쌍(서울과 같은 꼴)이다. 배차 0 은 모름,
+첫·막차 `0000` 은 빈 값으로 쓰인 예(13:15 → 00:00)가 있어 모름으로 본다. 2026-10-29: 361/362 노선, 배차값 349 노선. 실시간 응답 검증은 [인천 확장 현황](reports/incheon_scope.md)을 참고한다.
 
 ```powershell
-.\.venv\Scripts\python.exe data\scripts\fetch_incheon_routes.py  # 기존 DATA_GO_KR_API_KEY 사용
+.\.venv\Scripts\python.exe data\scripts\fetch_incheon_tago.py   # 기존 DATA_GO_KR_API_KEY 사용, 실패 시 같은 명령으로 이어받기
 .\.venv\Scripts\python.exe data\scripts\build_bus_route_seq.py  # 수집 완료분이 있으면 자동 병합
 ```
 
@@ -107,7 +112,7 @@ GTFS 의 **버스** 시각표는 첫차~막차를 대표 배차로 균등 분배
 `external/incheon_bus/<날짜>/`에 성공한 노선별 파일을 남겨 같은 명령으로 이어받고, 모두 성공해야 `sections.csv`를 쓴다.
 외부 API 복구 후 빈 `routeNo`로 전체 목록을 제공하는지도 실제 응답으로 확인해야 한다.
 `build_bus_route_seq.py --incheon <폴더>`로 특정 수집분을 선택할 수 있다. ICB ID를 우선해 기존 정류소 좌표를 연결하며,
-DB에 없는 정류소는 `reports/incheon_unmatched_stops.csv`에 남기고 제외한다. API의 Bessel TM 좌표를 경위도로 사용하지 않는다.
+경위도가 없는(인천시 API) 수집분에서 DB에 없는 정류소는 `reports/incheon_unmatched_stops.csv`에 남기고 제외한다. API의 Bessel TM 좌표를 경위도로 사용하지 않는다.
 인천 `MIN_ALLOCGAP`·`MAX_ALLOCGAP` 등 원본 필드는 보존하지만 아직 배차 표에 병합하지 않는다.
 노선 API 수집 호출도 포털의 노선 서비스 일일 한도를 소비한다(웹의 로컬 카운터에는 수집기 호출이 포함되지 않는다).
 

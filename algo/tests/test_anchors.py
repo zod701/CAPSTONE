@@ -70,7 +70,6 @@ def test_bus_hop_is_a_stop_cost_plus_cruise_split_by_region_and_express():
     assert bus_hop_s(2000, "경기도", "직행") == pytest.approx(BUS_HOP[("경기", True)][0] + 2 / BUS_HOP[("경기", True)][1] * 3600)
     assert bus_hop_s(800, None, "마을") == bus_hop_s(800, "경기도", "마을")   # 시도를 모르면 서울 밖으로 본다
 
-
 def test_service_hours_keep_every_window_of_a_route_and_day(tmp_path):
     from algo.anchors import in_service, load_service_hours
     # 같은 노선 · 요일 유형이 두 행이다 — 뒤 행(오전만)이 앞 행(오후까지)을 덮으면 낮 2시에 운행하지 않는 것으로 본다

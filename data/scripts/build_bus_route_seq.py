@@ -105,10 +105,13 @@ def normalize(seoul, gbis):
 def normalize_incheon(routes, sections, stops):
     """ICB ID로 기존 정류소 좌표를 연결. TM 좌표를 경위도로 오인하지 않는다.
 
-    DB에 없는 정류소는 별도 목록으로 보고한다. 미검증 좌표 변환/이름 추정은 하지 않는다.
+    TAGO 수집분(fetch_incheon_tago.py)은 ID 첫 자리가 +2 인 경우가 섞여 있어(368… = ICB 168…, 477… = GGB 257…)
+    같은 ID가 없으면 첫 자리 −2 로 다시 찾는다(ARS 번호로 확인). DB에 없는 정류소는 WGS84 좌표(gpslati·gpslong)가
+    있으면 원천 좌표로 넣고(in_db=0), 없으면 별도 목록으로 보고한다. 미검증 좌표 변환/이름 추정은 하지 않는다.
     """
     by_source = {sid[3:]: r for r in stops.to_dict("records") for sid in r["source_ids"].split("|")
                  if sid.startswith("ICB")}
+    by_any = {sid[3:]: r for r in stops.to_dict("records") for sid in r["source_ids"].split("|")}
     by_key = {r["stop_key"]: r for r in stops.to_dict("records")}
     meta = routes.set_index("ROUTEID")
     rows, missing = [], []
@@ -116,7 +119,15 @@ def normalize_incheon(routes, sections, stops):
         rid, sid = r["ROUTEID"], r["BSTOPID"]
         if rid not in meta.index or not re.fullmatch(r"\d{9}", sid):
             raise ValueError("인천 경유 정류소의 노선 또는 정류소 ID가 잘못되었습니다")
-        stop = by_source.get(sid) or by_key.get(sid)
+        low = str(int(sid[0]) - 2) + sid[1:] if sid[0] >= "2" else None
+        if sid in by_source or low in by_source:
+            stop = by_source[sid if sid in by_source else low]
+            sid = sid if sid in by_source else low
+        else:
+            stop = by_key.get(sid) or by_any.get(low)
+            sid = stop["stop_key"] if stop is not None else sid
+        if stop is None and r.get("gpslati"):
+            stop = {"name": r["BSTOPNM"], "lon": r["gpslong"], "lat": r["gpslati"]}
         if stop is None:
             missing.append(r)
             continue

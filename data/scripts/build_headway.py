@@ -8,7 +8,8 @@
    `ref/gtfs_station_map.csv` 로 잇는다. 매핑이 없는 GTFS 노선은 대상 밖(부산·대구 등)이라 건너뛰고 보고서에 적는다.
 2) **버스** (`headway_bus.csv`): GTFS 의 버스 시각표는 첫차~막차를 대표 배차로 **균등 분배한 합성값**이라 쓰지 않는다
    (실측: 경기 300번이 04:20부터 정확히 13분 간격). 원천의 배차값을 그대로 쓴다 — 경기 GBIS 노선 파일(요일 유형 4개 ×
-   최소·최대 배차 + 방향별 첫·막차) · 서울 노선 목록(`term` = 대표 배차 + 첫·막차, 요일 구분 없음).
+   최소·최대 배차 + 방향별 첫·막차) · 서울 노선 목록(`term` = 대표 배차 + 첫·막차, 요일 구분 없음) ·
+   인천 TAGO 노선 정보(`intervaltime` = 평일 배차 + 첫·막차 `HHMM`, fetch_incheon_tago.py 의 info.csv).
 """
 import argparse
 import csv
@@ -21,6 +22,7 @@ import pandas as pd
 
 from fetch_boundary import KST, ROOT, file_line, md_table, rel
 from fetch_gbis import latest, read_gbis
+from fetch_incheon_routes import OUT_DIR as INCHEON_DIR
 from fetch_seoul_routes import latest as latest_seoul_routes
 from geoutil import haversine_m
 from textnorm import name_key
@@ -62,8 +64,15 @@ def _num(v):
     return int(s) if s.isdigit() and int(s) > 0 else None
 
 
-def bus_rows(gbis, seoul, want_ids):
-    """경기 노선 파일 + 서울 노선 목록 → 배차 행. 우리 순서표에 있는 노선만, 값이 하나도 없는 요일 유형은 뺀다."""
+def _tago_hm(s):
+    """TAGO `HHMM`(정수로 오면 앞 0 이 빠진다) → 분. `0000` 은 13:15 → 00:00 처럼 빈 값으로 쓰인 예가 있어 모름으로 본다."""
+    s = str(s or "").strip().zfill(4)
+    return None if s == "0000" or not s.isdigit() else int(s[:-2]) * 60 + int(s[-2:])
+
+
+def bus_rows(gbis, seoul, want_ids, incheon=None):
+    """경기 노선 파일 + 서울 노선 목록 + 인천 TAGO 노선 정보 → 배차 행. 우리 순서표에 있는 노선만,
+    값이 하나도 없는 요일 유형은 뺀다."""
     out = []
     for r in gbis.to_dict("records"):
         if r["routeId"] not in want_ids:
@@ -85,6 +94,15 @@ def bus_rows(gbis, seoul, want_ids):
         # 서울 원천은 요일 구분이 없고 term 이 대표 배차 하나뿐이다 → 최소·최대에 같은 값
         out.append([r["busRouteId"], r["busRouteNm"], "seoul", "평일", term, term,
                     hhmm(first), hhmm(last), "", ""])
+    for r in (incheon.to_dict("records") if incheon is not None else ()):
+        if r["ROUTEID"] not in want_ids:
+            continue
+        # TAGO 도 요일 구분 없이 배차 하나(평일)와 첫·막차 한 쌍뿐이다 → 서울과 같은 꼴
+        term = _num(r.get("intervaltime"))
+        first, last = _tago_hm(r.get("startvehicletime")), _tago_hm(r.get("endvehicletime"))
+        if term is None and first is None and last is None:
+            continue
+        out.append([r["ROUTEID"], r["routeno"], "incheon", "평일", term, term, hhmm(first), hhmm(last), "", ""])
     # 배차는 정수 분(값이 없는 칸은 빈칸) — Int64 라야 CSV 에 10.0 이 아니라 10 으로 적힌다
     return pd.DataFrame(out, columns=BUS_COLUMNS).astype({"headway_min_m": "Int64", "headway_max_m": "Int64"})
 
@@ -200,6 +218,8 @@ def main(argv=None):
     ap.add_argument("--gtfs", type=Path, default=GTFS_DIR, help="KTDB GTFS 데이터셋 디렉터리")
     ap.add_argument("--gbis-routes", type=Path, default=None, help="GBIS 노선 파일 (기본: 가장 최근)")
     ap.add_argument("--seoul-routes", type=Path, default=None, help="서울 노선 목록 (기본: 가장 최근)")
+    ap.add_argument("--incheon-info", type=Path, default=None,
+                    help="인천 TAGO info.csv (기본: external/incheon_bus/ 의 가장 최근 것, 없으면 생략)")
     ap.add_argument("--route-stops", type=Path, default=ROOT / "data" / "processed" / "bus_route_stops.csv")
     ap.add_argument("--stations", type=Path, default=ROOT / "data" / "processed" / "subway_stations.csv")
     ap.add_argument("--line-groups", type=Path, default=ROOT / "data" / "ref" / "line_groups.csv")
@@ -211,6 +231,8 @@ def main(argv=None):
 
     gbis_path = args.gbis_routes or latest("route")
     seoul_path = args.seoul_routes or latest_seoul_routes()
+    found = sorted(INCHEON_DIR.glob("*/info.csv"))
+    incheon_path = args.incheon_info or (found[-1] if found else None)
     read = lambda p: list(csv.DictReader(open(p, encoding="utf-8-sig", newline="")))  # noqa: E731
 
     # --- 버스
@@ -218,7 +240,8 @@ def main(argv=None):
     seoul = pd.read_csv(seoul_path, dtype=str).fillna("")
     ours = pd.read_csv(args.route_stops, dtype=str, usecols=["route_id", "source"]).drop_duplicates()
     want = set(ours["route_id"])
-    bus = bus_rows(gbis, seoul, want)
+    incheon = pd.read_csv(incheon_path, dtype=str).fillna("") if incheon_path else None
+    bus = bus_rows(gbis, seoul, want, incheon)
     (args.out_dir / "headway_bus.csv").parent.mkdir(parents=True, exist_ok=True)
     bus.to_csv(args.out_dir / "headway_bus.csv", index=False, encoding="utf-8-sig")
 
@@ -240,11 +263,12 @@ def main(argv=None):
     cover = [(label, int((ours["source"] == label).sum()),
               int(bus_by_route[bus_by_route["source"] == label]["route_id"].isin(
                   set(ours.loc[ours["source"] == label, "route_id"])).sum()))
-             for label in ("gyeonggi", "seoul")]
+             for label in ("gyeonggi", "seoul", "incheon")]
     day_rows = [(label, int((bus["day_type"] == label).sum()),
                  int(bus.loc[bus["day_type"] == label, "headway_min_m"].notna().sum()))
                 for label, _ in DAY_TYPES]
     steps = [("GBIS 노선 파일", len(gbis)), ("서울 노선 목록", len(seoul)),
+             ("인천 TAGO 노선 정보", len(incheon) if incheon is not None else 0),
              ("우리 순서표 노선", len(ours)), ("배차를 찾은 노선", bus_by_route["route_id"].nunique()),
              ("버스 출력 행", len(bus)),
              ("GTFS 도시철도 노선 (대상)", len(keep)), ("GTFS 역 × 노선군 쌍", len(pairs)),
@@ -274,7 +298,8 @@ def main(argv=None):
     miss_rows = [(nm, g, n) for (nm, g), n in missing.most_common(30)]
     skip_rows = [(nm, n) for nm, n in skipped.most_common()]
     inputs = [file_line(p) for p in (gbis_path, seoul_path, args.gtfs / "stop_times.txt",
-                                     args.route_stops, args.stations, args.line_groups, args.station_map)]
+                                     args.route_stops, args.stations, args.line_groups, args.station_map,
+                                     *([incheon_path] if incheon_path else []))]
     table = md_table(steps)
     print(table)
     report = "\n".join([
@@ -285,7 +310,7 @@ def main(argv=None):
         f"- 출력: {file_line(args.out_dir / 'headway_bus.csv')}",
         f"- 출력: {file_line(args.out_dir / 'headway_rail.csv')}",
         "- 원천: KTDB 대중교통 GTFS(2025년 3월 **평일 1일** 기준) · 경기도 버스정보 기반정보 노선 파일 · "
-        "서울특별시 노선정보조회 `getBusRouteList`",
+        "서울특별시 노선정보조회 `getBusRouteList` · 국토교통부 TAGO 버스노선정보 `getRouteInfoIem`(인천)",
         "",
         "## 단계별 건수",
         "",

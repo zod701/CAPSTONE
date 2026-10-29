@@ -73,6 +73,21 @@ def test_bus_rows_seoul_term_and_filter():
     assert bus_rows(_gbis(), _seoul(), set()).empty   # 우리 순서표에 없는 노선은 뺀다
 
 
+def test_bus_rows_incheon_tago():
+    info = pd.DataFrame([{"ROUTEID": "369000038", "routeno": "5311", "intervaltime": "30",
+                          "startvehicletime": "0430", "endvehicletime": "2100"},
+                         {"ROUTEID": "365000001", "routeno": "790B", "intervaltime": "0",
+                          "startvehicletime": "1315", "endvehicletime": "0000"},
+                         {"ROUTEID": "365000002", "routeno": "35B", "intervaltime": "0",
+                          "startvehicletime": "0000", "endvehicletime": "0000"}])
+    out = bus_rows(_gbis().iloc[0:0], _seoul().iloc[0:0], {"369000038", "365000001", "365000002"}, info)
+    assert out["route_id"].tolist() == ["369000038", "365000001"]   # 값이 하나도 없는 노선은 뺀다
+    r = out.iloc[0]
+    assert (r["source"], r["day_type"], r["headway_min_m"], r["headway_max_m"]) == ("incheon", "평일", 30, 30)
+    assert (r["up_first"], r["up_last"]) == ("04:30", "21:00")
+    assert (out.iloc[1]["up_first"], out.iloc[1]["up_last"]) == ("13:15", "")   # 0000 은 모름
+
+
 # --- 노선군 매핑 ---
 
 def test_gtfs_line_map_uses_group_name_and_aliases():

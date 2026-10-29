@@ -35,6 +35,20 @@ def test_incheon_uses_icb_platform_and_preserves_sequence_gaps():
     assert out["route_type"].tolist() == ["간선", "간선"]
 
 
+def test_tago_ids_shifted_by_two_and_wgs84_fallback():
+    stops = pd.concat([STOPS, pd.DataFrame([{"stop_key": "232000413", "name": "백석마을", "lat": "37.68",
+                                             "lon": "126.62", "source_ids": "GGB232000413", "is_virtual": "0"}])])
+    tago = {"ROUTEID": "165000004", "DIRCD": "0", "gpslati": "", "gpslong": ""}
+    sections = pd.DataFrame([{**tago, "BSTOPSEQ": "1", "BSTOPID": "365000111", "BSTOPNM": "인천 승강장"},
+                             {**tago, "BSTOPSEQ": "2", "BSTOPID": "432000413", "BSTOPNM": "백석마을"},
+                             {**tago, "BSTOPSEQ": "3", "BSTOPID": "369999999", "BSTOPNM": "신설",
+                              "gpslati": "37.45", "gpslong": "126.63"}])
+    src, missing = normalize_incheon(ROUTES, sections, stops)
+    assert not missing
+    assert src["station_id"].tolist() == ["165000111", "232000413", "369999999"]
+    assert src["src_lon"].tolist() == [126.6, 126.62, 126.63]
+
+
 def test_duplicate_sequence_fails():
     with pytest.raises(ValueError, match="중복"):
         normalize_incheon(ROUTES, pd.DataFrame([SECTION, SECTION]), STOPS)
