@@ -34,6 +34,7 @@ $env:PYTHONUTF8="1"
 .\.venv\Scripts\python.exe data\scripts\build_subway_seq.py       # → processed/subway_line_seq.csv, reports/subway_line_seq.md
 .\.venv\Scripts\python.exe data\scripts\build_bus_route_seq.py    # → processed/bus_route_stops.csv, reports/bus_route_stops.md
 .\.venv\Scripts\python.exe data\scripts\build_headway.py          # → processed/headway_bus.csv, headway_rail.csv, reports/headway.md
+.\.venv\Scripts\python.exe data\scripts\build_rail_runs.py        # → processed/rail_runs.csv
 .\.venv\Scripts\python.exe data\scripts\build_subway_live_map.py  # → processed/subway_live_stations.csv, reports/subway_live_map.md
 .\.venv\Scripts\python.exe -m pytest data/tests
 ```
@@ -75,6 +76,11 @@ GTFS 의 **버스** 시각표는 첫차~막차를 대표 배차로 균등 분배
 786역 중 677역이 조회 가능하다. 진접선 3역은 열차 목적지(`진접행`)로만 나오고 역별 실시간이 없으며,
 용인에버라인·의정부경전철·김포골드라인·인천1호선·인천2호선·자기부상철도 106역은 현재 보유한 서울 실시간 원본에 노선군 자체가 없다 — 재시도 대상이 아니라 '실시간 미제공' 이다.
 조회는 `live_name` 단위로 묶는다(677행의 유일한 이름이 546개다 — 환승역은 한 응답에 여러 노선 행이 섞여 온다).
+
+**역 사이 운행 시간**(`rail_runs.csv`): 내부 대중교통 탐색의 도시철도 차내 시간이다. 같은 GTFS 시각표에서 열차마다 이웃한 두 정차의
+도착 시각 차(앞 역 정차 포함)를 모아 노선군 · 역 실체(`subway_line_seq.csv` 의 `phys_id`) 쌍별 중앙값을 낸다. 급행은 서는 역끼리만
+이웃이라 건너뛴 쌍으로 들어간다. GTFS 역은 배차표와 같은 규칙으로 우리 역에 붙인다. 배차표 스크립트와 따로 둔 것은 그쪽이 버스 원천의
+최신 파일도 다시 읽기 때문이다.
 
 **역 순서표**(`subway_line_seq.csv`): 한 행 = 순서 안의 역 하나. 순서(`chain_id`) 하나가 운영 노선 또는 지선 하나이고
 (`seoul2:성수지선` 처럼 지선은 분기역부터 시작), `loop=1` 이면 끝 역 다음이 첫 역이다. 같은 물리 역은 `phys_id` 가 같아

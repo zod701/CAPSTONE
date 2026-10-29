@@ -9,6 +9,7 @@ import csv
 from pathlib import Path
 
 FILE = "subway_line_seq.csv"
+RUNS_FILE = "rail_runs.csv"   # 역 사이 실제 운행 시간(GTFS, data/scripts/build_rail_runs.py) — 없으면 비워 둔다
 
 
 def _join(a, b, phys):
@@ -25,7 +26,7 @@ def _join(a, b, phys):
 
 
 class LinesDB:
-    def __init__(self, rows):
+    def __init__(self, rows, runs=()):
         seq, loop, groups, phys = {}, {}, {}, {}
         self._stations = {}   # station_id → (이름, lat, lon)
         for r in rows:
@@ -37,6 +38,12 @@ class LinesDB:
             seq[cid].append((int(r["seq"]), r["station_id"]))
             self._stations[r["station_id"]] = (r["name"], float(r["lat"]), float(r["lon"]))
             phys[r["station_id"]] = r["phys_id"]   # 같은 역의 노선별 행(환승)을 한 실체로 묶은 키
+        self._phys = phys
+        self._runs, self._runs_any = {}, {}
+        for r in runs:
+            key, secs = (r["from_phys"], r["to_phys"]), float(r["run_s"])
+            self._runs[(r["line_group"], *key)] = secs
+            self._runs_any.setdefault(key, secs)
         self._seq = {cid: tuple(sid for _, sid in sorted(v)) for cid, v in seq.items()}
         self._loop = loop
         self._by_group = {g: list(v) for g, v in groups.items()}
@@ -73,8 +80,17 @@ class LinesDB:
     @classmethod
     def load(cls, processed_dir):
         """processed/subway_line_seq.csv 를 읽는다. 없으면 FileNotFoundError."""
+        runs = []
+        if (Path(processed_dir) / RUNS_FILE).exists():
+            with open(Path(processed_dir) / RUNS_FILE, encoding="utf-8-sig", newline="") as f:
+                runs = list(csv.DictReader(f))
         with open(Path(processed_dir) / FILE, encoding="utf-8-sig", newline="") as f:
-            return cls(csv.DictReader(f))
+            return cls(csv.DictReader(f), runs)
+
+    def run_s(self, line_group, a, b):
+        """이웃한 두 역(a → b) 사이 실제 운행 초(앞 역 정차 포함) — 그 노선군 값, 없으면 같은 두 실체를 잇는 다른 노선군 값, 그것도 없으면 None."""
+        pa, pb = self._phys.get(a, a), self._phys.get(b, b)
+        return self._runs.get((line_group, pa, pb), self._runs_any.get((pa, pb)))
 
     def chains_for(self, line_group=None):
         """노선군의 덩어리 (지선을 따로 센다). line_group 이 없으면 전부 — 승·하차 역 id 로 어차피 좁혀진다."""

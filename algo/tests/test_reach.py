@@ -85,3 +85,46 @@ def test_rest_bound_stops_spreading_where_the_far_end_cannot_be_reached_in_time(
     tau, _ = reach.search(n, waits, {("bus", "s1"): 60.0}, limit_s=1e9, max_rides=2,
                           rest=lambda node: 2e9 if node in far else 0.0)
     assert ("bus", "s3") in tau and ("bus", "t4") not in tau
+
+
+class FixedHeadway(reach._Waits):
+    """노선별 배차(분)를 직접 준다."""
+
+    def __init__(self, n, minutes):
+        super().__init__(n, None, None, None)
+        self.minutes = minutes
+
+    def _bus_headway(self, rid):
+        return self.minutes.get(rid)
+
+
+def test_ride_wait_adds_lines_through_both_stops_but_not_a_slow_detour():
+    # A · D 는 s1 → s2 를 곧장, E 는 w5 로 크게 돌아 s2 에 간다. F 는 s1 에서 타지만 s2 를 지나지 않는다
+    routes = RoutesDB(rows("A", ["s1", "s2", "s3"]) + rows("D", ["s1", "s2"]) + rows("E", ["s1", "w5", "s2"])
+                      + rows("F", ["s1", "t4"]))
+    n = reach.Network(Stops(), routes, LinesDB([]))
+    waits = FixedHeadway(n, {"A": 10, "D": 10, "E": 10, "F": 10})
+    a = next(p for p, pat in enumerate(n.patterns) if pat[1] == "A")
+    assert waits.ride_wait(a, 0, 1) == pytest.approx(10 * 60 / 2 / 2)   # A · D 둘 — 배차 5분 꼴
+    assert waits.ride_wait(a, 0, 2) == pytest.approx(10 * 60 / 2)       # s3 까지는 A 뿐
+    assert waits.wait(a, ("bus", "s1")) == pytest.approx(10 * 60 / 2)   # 내릴 곳을 모르면 노선 하나
+    # 배차를 모르는 노선은 빼고, 아무도 모르면 기본 대기
+    assert FixedHeadway(n, {"D": 10}).ride_wait(a, 0, 1) == pytest.approx(10 * 60 / 2)
+    assert FixedHeadway(n, {}).ride_wait(a, 0, 1) == anchors.WAIT_UNKNOWN_S
+
+
+
+def test_rail_hops_use_timetable_runs_and_loops_cross_the_seam():
+    # 순환선 r1 → r2 → r3 (→ r1). r1 → r2 만 시각표 값이 있고 나머지는 거리 ÷ 노선군 속도
+    pts = {"r1": (127.00, 37.50), "r2": (127.01, 37.50), "r3": (127.01, 37.51)}
+    rows = [{"chain_id": "L2", "loop": "1", "line_group": "2호선", "seq": str(i), "station_id": sid, "phys_id": sid,
+             "name": sid, "lat": pts[sid][1], "lon": pts[sid][0]} for i, sid in enumerate(pts, 1)]
+    lines = LinesDB(rows, [{"line_group": "2호선", "from_phys": "r1", "to_phys": "r2", "run_s": "100"}])
+    n = reach.Network(Stops(), RoutesDB([]), lines)
+    tau, _ = reach.search(n, reach._Waits(n, None, None, None), {("subway", "r3"): 0.0}, limit_s=1e9, max_rides=1)
+    board = anchors.WAIT_UNKNOWN_S + anchors.RAIL_STATION_S
+    kmh = anchors.RAIL_KMH_BY_GROUP["2호선"]
+    # r3 → r1 은 이음매를 넘는 한 칸(거리 ÷ 속도), r1 → r2 는 시각표 100초
+    r3_r1 = haversine_m(*pts["r3"], *pts["r1"]) / 1000 / kmh * 3600
+    assert tau[("subway", "r1")] == pytest.approx(board + r3_r1)
+    assert tau[("subway", "r2")] == pytest.approx(min(board + r3_r1 + 100, board + haversine_m(*pts["r3"], *pts["r2"]) / 1000 / kmh * 3600))

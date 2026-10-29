@@ -188,7 +188,7 @@ def _ride_steps(net, waits, path):
         a, b = net.coord[nodes[i]], net.coord[nodes[j]]
         dist = sum(haversine_m(*net.coord[x][:2], *net.coord[y][:2]) for x, y in zip(nodes[i:j], nodes[i + 1:j + 1]))
         step = {"type": "SUBWAY" if kind == "subway" else "BUS", "time_s": cum[j] - cum[i], "distance_m": dist,
-                "wait_s": waits.wait(p, nodes[i]), "board_name": a[2], "alight_name": b[2],
+                "wait_s": waits.ride_wait(p, i, j), "board_name": a[2], "alight_name": b[2],
                 "stop_locs": [{"lon": a[0], "lat": a[1]}, {"lon": b[0], "lat": b[1]}], "line_group": brief.get("line_group")}
         if kind == "bus":
             step["fare_routes"] = [{"id": rid, "name": brief["name"], "type": brief["type"], "source": brief.get("source")}]
