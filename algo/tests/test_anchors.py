@@ -60,6 +60,29 @@ def test_road_distance_exceeds_straight_line():
     assert taxi_dist_km(*BASE, *move(BASE, 1000, 0)) > 1.0
 
 
+# --- 버스 차내 ---
+
+def test_bus_hop_is_a_stop_cost_plus_cruise_split_by_region_and_express():
+    from algo.anchors import BUS_HOP, bus_hop_s
+    # 서울 완행은 막혀 느리고, 경기는 칸 사이를 빨리 달린다 — 정류장이 촘촘할수록 고정분이 몫을 더 차지한다
+    assert bus_hop_s(0, "서울특별시", "간선") == BUS_HOP[("서울", False)][0]
+    assert bus_hop_s(500, "서울특별시", "간선") > bus_hop_s(500, "경기도", "일반")
+    assert bus_hop_s(2000, "경기도", "직행") == pytest.approx(BUS_HOP[("경기", True)][0] + 2 / BUS_HOP[("경기", True)][1] * 3600)
+    assert bus_hop_s(800, None, "마을") == bus_hop_s(800, "경기도", "마을")   # 시도를 모르면 서울 밖으로 본다
+
+
+def test_service_hours_keep_every_window_of_a_route_and_day(tmp_path):
+    from algo.anchors import in_service, load_service_hours
+    # 같은 노선 · 요일 유형이 두 행이다 — 뒤 행(오전만)이 앞 행(오후까지)을 덮으면 낮 2시에 운행하지 않는 것으로 본다
+    (tmp_path / "headway_bus.csv").write_text(
+        "route_id,route_name,source,day_type,headway_min_m,headway_max_m,up_first,up_last,down_first,down_last\n"
+        "R,1,gyeonggi,평일,,,05:10,13:55,06:45,15:30\n"
+        "R,1,gyeonggi,평일,,,05:10,13:36,,\n", encoding="utf-8")
+    hours = load_service_hours(tmp_path)
+    assert len(hours["R"]["평일"]) == 3
+    assert in_service(hours, "R", "평일", datetime(2026, 10, 29, 14, 15))
+
+
 # --- 요금 유형 ---
 
 def test_fare_type_by_city():

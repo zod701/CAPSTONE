@@ -185,7 +185,7 @@ def test_propose_extends_a_kakao_part_by_one_more_ride():
     head = next(c["head"] for c in cands if c["head"]["point"]["id"] == "x")
     assert head["source"] == "line" and head["query"] == search.key("transit", OP, pts["x"])
     assert head["steps"][0]["fare_routes"][0]["id"] == "11" and head["steps"][-1]["fare_routes"][0]["id"] == "L"
-    ride_ux = search.haversine_m(*pts["u"], *pts["x"]) / 1000 / anchors.BUS_KMH["일반"] * 3600
+    ride_ux = anchors.bus_hop_s(search.haversine_m(*pts["u"], *pts["x"]), None, "일반")
     assert head["time_s"] == pytest.approx(720 + anchors.WAIT_UNKNOWN_S + ride_ux)   # 기준 경로 u 까지(응답) + 대기 + 차내
     assert diag["heads"]["line"] >= 1
 

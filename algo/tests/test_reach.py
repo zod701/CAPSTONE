@@ -30,6 +30,9 @@ class Stops:
     def row(self, kind, i):
         return {"stop_key": self.keys[i]}
 
+    def by_id(self, kind, sid):
+        return None   # 시도를 모른다 — 서울 밖으로 본다
+
 
 def net():
     # C: w5 → t4. w5 는 t3 에서 약 200 m, s3 에서 300 m 넘게 떨어져 있다 — s3 에서 내려 걸어서는 바로 못 간다
@@ -38,7 +41,7 @@ def net():
 
 
 def ride(a, b):
-    return haversine_m(*PTS[a], *PTS[b]) / 1000 / anchors.BUS_KMH["일반"] * 3600
+    return anchors.bus_hop_s(haversine_m(*PTS[a], *PTS[b]), None, "일반")
 
 
 def test_forward_reaches_through_a_walked_transfer_within_the_ride_limit():
@@ -61,7 +64,7 @@ def test_backward_gives_time_left_to_the_destination_and_respects_the_limit():
     back, par = reach.search(n, waits, {("bus", "t4"): 30.0}, limit_s=1e9, max_rides=2, backward=True)
     walk = anchors.walk_s(haversine_m(*PTS["s3"], *PTS["t3"]))
     assert back[("bus", "t3")] == pytest.approx(w + ride("t3", "t4") + 30)
-    assert back[("bus", "s1")] == pytest.approx(w + ride("s1", "s3") + walk + back[("bus", "t3")], rel=1e-6)
+    assert back[("bus", "s1")] == pytest.approx(w + ride("s1", "s2") + ride("s2", "s3") + walk + back[("bus", "t3")], rel=1e-6)
     start, path = reach.legs(n, par, ("bus", "s1"), backward=True)
     assert start == ("bus", "t4") and [leg[0] for leg in path] == ["ride", "walk", "ride"]
     tight, _ = reach.search(n, waits, {("bus", "t4"): 30.0}, limit_s=back[("bus", "t3")], max_rides=2, backward=True)

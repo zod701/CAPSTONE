@@ -3,7 +3,8 @@
 시작 표지(출발지 도보 · 카카오 기준 경로 위 지점 · 택시로 간 정류장 …)는 호출자(`search.propose`)가 준다. 여기서는 노선을
 최대 `max_rides` 번 더 탄다 — 정방향은 그때까지 걸린 시간, 역방향(`backward`)은 목적지까지 남은 시간이다.
 
-차내 = 순서표 거리 ÷ 유형별 표정속도(버스 유형별, 도시철도 노선군별), 대기 = 배차의 절반(모르면 기본 대기),
+차내 = 버스는 정류장 칸마다 정차 고정분 + 거리 ÷ 주행속도(지역 · 노선 부류별, `anchors.bus_hop_s`), 도시철도는 순서표 거리 ÷
+노선군별 표정속도, 대기 = 배차의 절반(모르면 기본 대기),
 갈아탈 때는 `TRANSFER_M` 안 정류장으로 걷는다. 한 정류장의 표지는 시간 하나다(요금은 경로를 다시 짜 낸다).
 기준선보다 5분 빨라질 수 없는 시각을 넘는 표지는 펼치지 않는다(`limit_s`).
 """
@@ -30,12 +31,14 @@ class Network:
             brief = routes._brief(rid)
             if brief["type"] in anchors.EXCLUDED_ROUTE_TYPES or len(seq) < 2:
                 continue
-            kmh = anchors.BUS_KMH.get(brief["type"] or "", anchors.BUS_KMH_DEFAULT)
             nodes = tuple(("bus", k) for k in seq)
             for k in seq:
                 name, lat, lon = routes.stop(k)
                 self.coord[("bus", k)] = (lon, lat, name)
-            self._add("bus", rid, brief, nodes, kmh)
+
+            def hop(a, dist, rtype=brief["type"]):
+                return anchors.bus_hop_s(dist, (stops.by_id("bus", a[1]) or {}).get("sido_nm"), rtype)
+            self._add("bus", rid, brief, nodes, hop)
         group_of = {cid: g for g, cids in lines._by_group.items() for cid in cids}
         for cid in lines.chains_for(None):
             seq = lines.sequence(cid)
@@ -47,14 +50,15 @@ class Network:
             brief = {"id": cid, "name": group_of.get(cid), "type": "지하철", "line_group": group_of.get(cid)}
             kmh = anchors.RAIL_KMH_BY_GROUP.get(group_of.get(cid), anchors.RAIL_KMH_DEFAULT)
             for nodes in (tuple(("subway", s) for s in seq), tuple(("subway", s) for s in reversed(seq))):
-                self._add("subway", cid, brief, nodes, kmh)
+                self._add("subway", cid, brief, nodes, lambda a, dist, kmh=kmh: dist / 1000.0 / kmh * 3600.0)
         self._near = {}
 
-    def _add(self, kind, rid, brief, nodes, kmh):
+    def _add(self, kind, rid, brief, nodes, hop):
+        """hop(앞 정류장, 칸 거리 m) → 그 칸의 차내 초."""
         cum, total = [0.0], 0.0
         for a, b in zip(nodes, nodes[1:]):
             (x1, y1, _), (x2, y2, _) = self.coord[a], self.coord[b]
-            total += haversine_m(x1, y1, x2, y2) / 1000.0 / kmh * 3600.0
+            total += hop(a, haversine_m(x1, y1, x2, y2))
             cum.append(total)
         p = len(self.patterns)
         self.patterns.append((kind, rid, brief, nodes, cum))
