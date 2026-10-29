@@ -1,6 +1,6 @@
 """요청 동안만 보관하는 개발자용 후보 처리 기록. 외부 API·파일 저장 없음.
 
-후보는 모두 `O → u →(택시) v → D` 꼴이다(algo/search.py). 후보가 수만 개일 수 있어 단계 집계는 전체로 내고,
+후보는 모두 `O → u →(택시) v → D` 꼴이다(algo/search.py). 앞부분이 택시로 시작하면(출발지 → 기준 경로 승차 지점) 택시가 둘이다. 후보가 수만 개일 수 있어 단계 집계는 전체로 내고,
 경로 설명·지도 좌표는 보낼 후보(확인을 시도한 것 전부 + 추정 점수 상위 LIMIT 개)에만 만든다.
 """
 import math
@@ -9,11 +9,13 @@ import math
 STAGES = ["후보 생성", "검증 순서·예산", "경로 검증", "시간 절약 검사", "최종 결과"]
 VERIFY = STAGES.index("경로 검증")   # 이 단계까지 온 후보는 카카오로 확인한 것이다
 LIMIT = 500
-SOURCES = {"origin": "출발지", "route": "기준 경로", "line": "직행 노선", "destination": "목적지"}
+SOURCES = {"origin": "출발지", "route": "기준 경로", "line": "노선 더 탐", "taxi_route": "택시 → 기준 경로",
+           "taxi_line": "택시 → 노선 더 탐",
+           "destination": "목적지"}
 
 
 def _shape(cand):
-    """후보가 앞뒤 부분을 어디서 가져왔는지 — '기준 경로 → 직행 노선' 처럼."""
+    """후보가 앞뒤 부분을 어디서 가져왔는지 — '기준 경로 → 노선 더 탐' 처럼."""
     return "%s → %s" % (SOURCES[cand["head"]["source"]], SOURCES[cand["tail"]["source"]])
 
 
@@ -23,8 +25,8 @@ def _itinerary(steps, start, end):
     if steps and steps[0]["type"] in ("BUS", "SUBWAY"):
         parts.append("도보")
     for step in steps:
-        if step["type"] == "TAXI":
-            parts.append(f"{start}에서 {end}까지 택시")
+        if step["type"] == "TAXI":   # 첫 택시(출발지 → 기준 경로 승차 지점)는 자기 양끝 이름을 들고 온다
+            parts.append(f"{step.get('from_name', start)}에서 {step.get('to_name', end)}까지 택시")
         elif step["type"] == "WALKING":
             if parts[-1] != "도보":
                 parts.append("도보")
@@ -48,7 +50,7 @@ def _geometry(steps, connector, origin, destination, group_color=None):
     for step in steps or []:
         kind = step["type"]
         if kind == "TAXI":
-            path = connector
+            path = step.get("path") or connector
         else:
             path = [[p["lon"], p["lat"]] for p in step.get("stop_locs") or []
                     if p and p.get("lon") is not None and p.get("lat") is not None]
@@ -77,7 +79,7 @@ class HybridTrace:
         self.baseline = {k: baseline.get(k) for k in ("time_s", "fare")}
         self.group_color = group_color
         self.generation = generation
-        # 직행 노선 탐색 반경 — 걸어서 타는 쪽(head)과 택시에서 내려 타는 쪽(tail)
+        # 출발지·목적지에서 걸어서 닿는 정류소를 찾은 도보 반경 — 출발 쪽(head)과 도착 쪽(tail)
         self.buffers = {side: generation["line_" + side].get("buffers", {}) for side in ("head", "tail")}
         self.candidates = candidates   # 추정 점수 오름차순
         self.state = {c["id"]: {"stage": len(STAGES) - 1, "reason": "최종 결과", "verified": None} for c in candidates}
@@ -89,9 +91,16 @@ class HybridTrace:
     def reject_id(self, cid, stage, reason):
         self.state[cid].update(stage=STAGES.index(stage), reason=reason)
 
+    def _lead(self, head):
+        """앞부분이 택시로 시작하면 그 택시 구간 — 출발지에서 기준 경로 승차 지점까지 직선."""
+        b = head.get("taxi_from")
+        return [{"type": "TAXI", "from_name": "출발지", "to_name": b["name"],
+                 "path": [list(self.origin), [b["lon"], b["lat"]]]}] if b else []
+
     def verified(self, candidate, row):
         steps = list(row["transit"]["steps"])
         steps.insert(row["taxi_at"], {"type": "TAXI"})
+        steps = self._lead(candidate["head"]) + steps
         self.state[candidate["id"]]["verified"] = {
             "time_s": row["time_s"], "fare": row["fare"], "score": row["fare"] + row["time_s"] / 60 * self.vot,
             "steps": steps}
@@ -101,7 +110,7 @@ class HybridTrace:
         h, t, st = cand["head"], cand["tail"], self.state[cand["id"]]
         u, v = h["point"], t["point"]
         connector = [[u["lon"], u["lat"]], [v["lon"], v["lat"]]]
-        steps = h["steps"] + [{"type": "TAXI"}] + t["steps"]
+        steps = self._lead(h) + h["steps"] + [{"type": "TAXI"}] + t["steps"]
         verified = st["verified"]
         if verified is not None:
             vsteps = verified.pop("steps")
@@ -111,8 +120,9 @@ class HybridTrace:
                 "estimated_score": cand["fare"] + cand["time_s"] / 60 * self.vot,
                 "estimated": {"time_s": cand["time_s"], "fare": cand["fare"]},
                 "connector": connector,
-                "anchors": [{"id": p["point"]["id"], "name": p["point"]["name"], "lon": p["point"]["lon"],
-                             "lat": p["point"]["lat"]} for p in (h, t) if p["source"] not in ("origin", "destination")],
+                "anchors": [{"id": p["id"], "name": p["name"], "lon": p["lon"], "lat": p["lat"]}
+                            for p in ([h["taxi_from"]] if h.get("taxi_from") else [])
+                            + [x["point"] for x in (h, t) if x["source"] not in ("origin", "destination")]],
                 "stage": st["stage"], "reason": st["reason"], "verified": verified,
                 "itinerary": _itinerary(steps, u["name"], v["name"]),
                 "geometry": _geometry(steps, connector, self.origin, self.destination, self.group_color)}

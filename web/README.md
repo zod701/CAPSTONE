@@ -123,8 +123,9 @@ $env:PYTHONUTF8="1"
 오류는 `{"error": {"code", "message", "action", "upstream_status"}}` 형태로 온다.
 
 하이브리드(`/api/hybrid`)는 **화면의 버튼을 눌렀을 때만** 부른다 — 기준 경로 1콜 + 후보 확인 최대 30콜(자동차·대중교통 합)이다.
-응답의 `routes[]` 는 모두 `출발지 →(대중교통) u →(택시 1회) v →(대중교통) 목적지` 꼴이다 —
-`from`·`to`(택시를 타고 내리는 정류소 — 출발지·목적지 그대로면 `null`) · `head`·`tail`(앞·뒤 부분의 출처 `origin`·`route`·`line`·`destination`) ·
+응답의 `routes[]` 는 모두 `출발지 →(대중교통) u →(택시) v →(대중교통) 목적지` 꼴이다(앞부분이 택시로 시작하면 택시 2회) —
+`from`·`to`(택시를 타고 내리는 정류소 — 출발지·목적지 그대로면 `null`) · `head`·`tail`(앞·뒤 부분의 출처 `origin`·`route`·`taxi_route`·`line`(노선 1번 더)·`taxi_line`·`destination`) ·
+`first_taxi`(앞부분이 택시로 시작하면 `{to, taxi, counted_s}` — 출발지에서 `to` 까지의 첫 택시, 아니면 `null`) ·
 `transit`(택시를 뺀 대중교통 구간들 `steps`) · `taxi_at`(`transit.steps` 에서 택시를 끼울 자리) ·
 `taxi_counted_s`(총 시간에 넣은 택시 몫 — 호출 대기 포함, 택시 뒤에 차를 잡아야 하면 연결 여유도) · `taxi`(자동차 경로 응답) ·
 `transit_time_s` · `fare_info`(대중교통 요금 계산 방식) ·

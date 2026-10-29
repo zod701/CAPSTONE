@@ -133,3 +133,18 @@ test('pareto front keeps only points no other point beats on both time and fare'
     { id: 'worse', time_s: 800, fare: 9500 }, { id: 'middle', time_s: 700, fare: 6000 }, { id: 'tie', time_s: 700, fare: 6500 }];
   assert.deepEqual(paretoFront(points).map(p => p.id), ['fast', 'middle', 'slow-cheap']);
 });
+
+test('hybrid card puts a first taxi before the transit it boards', () => {
+  const source = readFileSync(new URL('../frontend/js/hybrid.js', import.meta.url), 'utf8');
+  const code = source.slice(source.indexOf('function taxiStep'), source.indexOf('function fareText')).replaceAll('export ', '');
+  const context = vm.createContext({});
+  vm.runInContext(code + '; this.combinedRoute = combinedRoute;', context);
+  const r = { taxi: { duration_s: 600, fare: { taxi: 9000, toll: 0 } }, taxi_counted_s: 690, taxi_at: 1,
+    from: { name: 'u' }, to: null, transit: { steps: [{ type: 'SUBWAY' }] },
+    first_taxi: { taxi: { duration_s: 300, fare: { taxi: 5000, toll: 0 } }, counted_s: 450, to: { name: 'b' } } };
+  const steps = context.combinedRoute(r).steps;
+  // vm 안에서 만든 배열이라 JSON 으로 견준다 (undefined 는 null 이 된다)
+  assert.equal(JSON.stringify(steps.map(s => [s.type, s.from_name, s.to_name, s.counted_s])),
+    JSON.stringify([['TAXI', null, 'b', 450], ['SUBWAY', null, null, null], ['TAXI', 'u', null, 690]]));
+  assert.equal(context.combinedRoute({ ...r, first_taxi: null }).steps.length, 2);
+});

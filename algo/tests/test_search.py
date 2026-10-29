@@ -68,7 +68,7 @@ def test_the_four_old_shapes_are_all_pairs_of_one_rule():
 
 
 def test_full_taxi_and_short_taxi_are_not_hybrids():
-    near = stop("n", 127.017, 37.3018)            # 출발지에서 약 200 m — 걷는 편이 빠르다
+    near = stop("n", 127.017, 37.3009)            # 출발지에서 약 100 m — 걷는 편이 빠르다
     route = {**ROUTE, "steps": [ride(O, near, 300), ride(near, D, 3000)]}
     heads, tails = parts(route)
     cands, diag = search.pair(heads, tails, vot=VOT, baseline_s=100000, at=DAY)
@@ -116,11 +116,10 @@ class Api:
 
 
 def line_head():
-    """출발지에서 걸어 타는 직행 노선으로 u 에 닿는 앞부분 — 검증 때 O → u 대중교통을 부른다."""
-    end = {"anchor": "u", "name": "u", "lon": U["lon"], "lat": U["lat"], "kind": "bus", "sgg_nm": None,
-           "line_group": None, "fare_step": ride(O, U, 500), "time_s": 700.0, "transit_fare": 1650.0,
-           "walk_s": 0.0, "ride_name": "11", "headway_m": 10.0}
-    return search.line_parts([end], OP, DP, "head", at=DAY)[0]
+    """노선을 더 타서 u 에 닿는 앞부분 — 검증 때 O → u 대중교통을 부른다."""
+    point = {"id": "u", "name": "u", "lon": U["lon"], "lat": U["lat"], "kind": "bus"}
+    return search._part(point, [ride(O, U, 500)], 700.0, 1650.0, source="line", at=DAY,
+                        query=search.key("transit", OP, (U["lon"], U["lat"])))
 
 
 def test_verify_uses_one_car_call_for_parts_cut_from_the_base_route():
@@ -161,10 +160,82 @@ def test_run_stops_at_the_query_budget():
     assert len(api.calls) == len(run.query_order) <= 2 and found
 
 
-def test_corridor_keeps_origin_destination_and_thins_route_stops():
-    pts = search.corridor(OP, DP, [ROUTE])
-    assert pts[:2] == [OP, DP]
-    assert all(search.haversine_m(*a, *b) >= search.CORRIDOR_STEP_M for i, a in enumerate(pts) for b in pts[:i])
-    # 솎아 낸 정류소는 남은 중심 중 하나에서 간격 안이다
-    assert all(min(search.haversine_m(*xy, *k) for k in pts) < search.CORRIDOR_STEP_M
-               for xy in [(p["lon"], p["lat"]) for p in anchors.route_points(ROUTE, OP)])
+def test_propose_extends_a_kakao_part_by_one_more_ride():
+    # 기준 경로를 타고 u 에서 내려, 카카오가 주지 않은 노선 L 로 한 번 갈아타 x 까지 — 같은 탐색에서 나온다
+    from app.linesdb import LinesDB
+    from app.routesdb import RoutesDB
+    pts = {"u": (U["lon"], U["lat"]), "x": (127.03, 37.327)}
+
+    class Near:
+        keys = list(pts)
+
+        def near(self, kind, lon, lat, r):
+            return [(i, d) for i, k in enumerate(self.keys) if kind == "bus" and (d := search.haversine_m(lon, lat, *pts[k])) <= r]
+
+        def row(self, kind, i):
+            k = self.keys[i]
+            return {"stop_key": k, "name": k, "lon": pts[k][0], "lat": pts[k][1]}
+
+        def by_id(self, kind, sid):
+            return None
+
+    routes = RoutesDB([{"is_virtual": "0", "stop_key": k, "name": k, "lat": pts[k][1], "lon": pts[k][0], "route_id": "L",
+                        "route_name": "L", "source": "gyeonggi", "route_type": "일반"} for k in ("u", "x")])
+    cands, diag = search.propose(Near(), routes, LinesDB([]), OP, DP, [ROUTE], [ROUTE], vot=VOT, baseline_s=100000, at=DAY)
+    head = next(c["head"] for c in cands if c["head"]["point"]["id"] == "x")
+    assert head["source"] == "line" and head["query"] == search.key("transit", OP, pts["x"])
+    assert head["steps"][0]["fare_routes"][0]["id"] == "11" and head["steps"][-1]["fare_routes"][0]["id"] == "L"
+    ride_ux = search.haversine_m(*pts["u"], *pts["x"]) / 1000 / anchors.BUS_KMH["일반"] * 3600
+    assert head["time_s"] == pytest.approx(720 + anchors.WAIT_UNKNOWN_S + ride_ux)   # 기준 경로 u 까지(응답) + 대기 + 차내
+    assert diag["heads"]["line"] >= 1
+
+
+
+# 택시 최대 2회 — 출발지에서 택시로 기준 경로 승차 지점까지 가서 그 경로를 타는 앞부분
+FAR = {**ROUTE, "steps": [dict(ROUTE["steps"][0], time_s=1500)] + ROUTE["steps"][1:]}   # 출발지 → u 버스가 25분이나 걸린다
+
+
+def test_taxi_heads_board_the_base_route_by_taxi_only_when_faster():
+    heads = search.route_taxi_heads([FAR], OP, Stops(), sgg_o=None, vot=VOT, at=DAY)
+    by = {h["point"]["id"]: h for h in heads}
+    # v 는 u 에서 22번에, D 는 v 에서 33번에 올라타는 쪽이 빠르다 — 정류소마다 가장 나은 승차 지점 하나
+    assert {k: h["taxi_from"]["id"] for k, h in by.items()} == {"v": "u", "D": "v"}
+    v = by["v"]
+    taxi_s = anchors.taxi_plan_s(anchors.taxi_s_for(search.haversine_m(*OP, U["lon"], U["lat"]), DAY), True)
+    assert v["time_s"] == pytest.approx(taxi_s + 120 + 3600) and v["lower_s"] == pytest.approx(anchors.taxi_plan_s(0, True) + 3720)
+    assert v["fare"] > search._part(V, v["steps"], 0, 1650, source="route", at=DAY)["fare"]   # 첫 택시 요금이 들어간다
+    # 원래 경로가 그 승차 지점까지 더 빠르면 택시로 올라타지 않는다 — ROUTE 는 u 까지 12분이라 u 에서는 올라타지 않는다
+    assert all(h["taxi_from"]["id"] != "u" for h in search.route_taxi_heads([ROUTE], OP, Stops(), sgg_o=None, vot=VOT, at=DAY))
+
+
+def test_verify_calls_the_first_taxi_and_adds_its_time_and_fare():
+    head = search.route_taxi_heads([FAR], OP, Stops(), sgg_o=None, vot=VOT, at=DAY)
+    cands, _ = search.pair(head, [destination()], vot=VOT, baseline_s=100000, at=DAY)
+    c, api = find(cands, "v", "D"), Api()
+    first = search.key("car", OP, (U["lon"], U["lat"]))
+    assert first in search.queries(c, OP, DP)
+    r = asyncio.run(search.verify(api, c, OP, DP, VOT, DAY))
+    assert sorted(api.calls) == sorted(search.queries(c, OP, DP))
+    assert r["first_taxi_s"] == pytest.approx(anchors.taxi_plan_s(600, True))
+    assert r["time_s"] == pytest.approx(r["first_taxi_s"] + 120 + 3600 + anchors.taxi_plan_s(600, False))
+    assert r["fare"] == pytest.approx(9000 * 2 + r["fare_info"]["value"])
+    assert r["transit_time_s"] == pytest.approx(120 + 3600)
+
+
+def test_rest_takes_the_faster_of_taxi_and_rail():
+    # 짧으면 택시 고정분보다 전철 연결이 짧고, 길면 전철이 거리당 빠르다 — 지금 계수에서는 전철 쪽이 하한이 된다
+    for m in (500, 3000, 15000):
+        rail = m / 1000 / search.REST_RAIL_KMH * 3600 + search.REST_RAIL_CONNECT_S
+        assert search.rest_s(m, DAY) == pytest.approx(min(anchors.taxi_s_for(m, DAY), rail))
+    assert search.rest_s(0, DAY) == pytest.approx(min(anchors.taxi_s_for(0, DAY), search.REST_RAIL_CONNECT_S))
+
+
+def test_band_drops_only_candidates_clearly_behind_on_both_axes():
+    def c(name, minutes, fare):
+        return {"name": name, "time_s": minutes * 60.0, "fare": fare}
+    cands = [c("fast", 30, 20000), c("cheap", 50, 8000), c("both_worse", 40, 21500),   # fast 보다 10분 느리고 1,500원 비싸다
+             c("near", 32, 20500), c("slower_cheaper", 35, 19500)]
+    kept, dropped = search._band(cands, 180, 1000)
+    assert sorted(k["name"] for k in kept) == ["cheap", "fast", "near", "slower_cheaper"] and dropped == 1
+    # 띠를 0 으로 두면 보통의 Pareto 지배 — near · slower_cheaper 도 fast 에 밀리지 않으면 남는다
+    assert sorted(k["name"] for k in search._band(cands, 0, 0)[0]) == ["cheap", "fast", "slower_cheaper"]

@@ -693,17 +693,17 @@ export function clearTransit() {
 
 // --- 택시 ---
 
-// fit: 택시 경로와 지도에 켜진 대중교통 경로가 함께 보이게 맞춘다
-export function drawCar(car, { fit = false } = {}) {
+// fit: 택시 경로와 지도에 켜진 대중교통 경로가 함께 보이게 맞춘다. 택시 구간이 여럿이면 배열로 넘긴다(빈 칸은 건너뛴다)
+export function drawCar(cars, { fit = false } = {}) {
   const g = v.carGroup;
   const renderer = v.renderers.car;
   g.clearLayers();
-  if (car?.path?.length >= 2) {
-    const latlngs = car.path.map(ll);
+  const lines = [cars].flat().filter((car) => car?.path?.length >= 2).map((car) => car.path.map(ll));
+  for (const latlngs of lines) {
     L.polyline(latlngs, { color: "#000000", weight: 7, opacity: 0.85, renderer, interactive: false }).addTo(g);
     L.polyline(latlngs, { color: COLOR.TAXI, weight: 4, opacity: 1, renderer, interactive: false }).addTo(g);
-    if (fit) v.map.fitBounds(extendWith(L.latLngBounds(latlngs), v.transitGroup), FIT);
   }
+  if (fit && lines.length) v.map.fitBounds(extendWith(L.latLngBounds(lines.flat()), v.transitGroup), FIT);
   syncAttribution();
 }
 

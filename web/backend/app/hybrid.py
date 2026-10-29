@@ -1,11 +1,11 @@
 """하이브리드(택시 ↔ 대중교통) 경로 — algo 의 후보를 온라인으로 확인해 화면에 줄 형태로 만든다.
 
-모든 후보는 `O →(대중교통·도보*) u →(택시 1회) v →(대중교통·도보*) D` 한 꼴이다(algo/search.py, method.md §3.8).
-u 는 출발지 · 기준 경로를 타고 가다 내리는 정류소 · 출발지에서 걸어 타는 직행 노선의 하차 지점이고,
-v 는 목적지 · 기준 경로의 승차 지점 · 목적지로 곧장 가는 직행 노선의 승차 지점이다. 그 모든 짝이 후보다(Tier 1, 쿼터 0).
+모든 후보는 `O →[택시 →](대중교통·도보*) u →(택시) v →(대중교통·도보*) D` 한 꼴이다(algo/search.py, method.md §3.8).
+u·v 는 탐색 하나로 만든다 — 시간을 아는 곳(출발지 · 기준 경로 위 정류소 · 택시로 간 정류소)에서 정적 노선표의 노선을 한 번 더 타 닿는
+정류소까지가 u, 목적지 쪽에서 거꾸로 같은 것이 v 다. 그 모든 짝이 후보다(Tier 1, 쿼터 0).
 확인(Tier 2)은 순차 검증 탐색(algo/lazy_pareto)이 고른다 — 검증 결과의 시간·요금 Pareto 를 보며 다음 질의를 정하고,
 요청마다 카카오 고유 질의 SEARCH_BUDGET 회(자동차 + 대중교통, 기준 경로 1콜 제외)에서 멈춘다. 택시는 자동차 1콜,
-직행 노선 쪽 구간이 있으면 그 구간의 대중교통이 1콜씩 더 든다. 그래서 화면의 버튼을 눌렀을 때만 돈다 → method.md §2.4.
+노선을 더 탄 쪽 구간이 있으면 그 구간의 대중교통이 1콜씩 더 든다. 그래서 화면의 버튼을 눌렀을 때만 돈다 → method.md §2.4.
 택시 시간에는 호출 대기가 들어가고(taxi_plan_s), 기준선보다 5분 이상 빠르지 않은 후보는 뺀다.
 
 `/api/hybrid` 는 모든 승차 대기에 배차 추정을 쓴다. `plan` 에 `arrivals` 를 주면 첫 승차 대기를 실시간으로 바꾼 경로를
@@ -174,9 +174,15 @@ def _same_card(a, b, o, d):
 
 
 def _row(cand, result):
-    """검증 결과 → 화면에 줄 항목. 화면은 대중교통 구간들(`transit.steps`)의 `taxi_at` 자리에 택시 구간을 끼운다."""
+    """검증 결과 → 화면에 줄 항목. 화면은 대중교통 구간들(`transit.steps`)의 `taxi_at` 자리에 택시 구간을 끼운다.
+    앞부분이 택시로 시작하면(`first_taxi`) 그 택시는 맨 앞 — 출발지에서 `first_taxi.to` 까지 — 에 하나 더 끼운다."""
     steps = result["head_steps"] + result["tail_steps"]
-    return {"from": _end(cand["head"]), "to": _end(cand["tail"]),
+    first = None
+    if result.get("first_car"):
+        b = cand["head"]["taxi_from"]
+        first = {"to": {k: b.get(k) for k in ("id", "name", "lon", "lat")}, "taxi": result["first_car"],
+                 "counted_s": result["first_taxi_s"]}
+    return {"from": _end(cand["head"]), "to": _end(cand["tail"]), "first_taxi": first,
             "head": cand["head"]["source"], "tail": cand["tail"]["source"], "taxi_at": len(result["head_steps"]),
             "time_s": result["time_s"], "fare": result["fare"], "fare_info": result["fare_info"],
             "transit_time_s": result["transit_time_s"],

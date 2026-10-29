@@ -518,20 +518,21 @@ def test_hybrid_developer_trace_is_opt_in_and_does_not_add_api_calls(tmp_path, u
 
 
 def test_hybrid_builds_both_line_sides_and_pairs_them(tmp_path, up, monkeypatch):
-    """직행 노선 끝점은 두 쪽(걸어서 타는 head · 택시에서 내려 타는 tail)을 모두 만들고, 모든 앞·뒤 부분을 짝짓는다."""
-    from algo import anchors
+    """노선을 더 타는 확장은 앞(걸어서 · 택시로 시작)과 뒤(거꾸로) 모두 하고, 모든 앞·뒤 부분을 짝짓는다."""
+    from algo import search
     seen = []
-    real = anchors.direct_ends
+    real = search._extend
 
     def spy(*args, **kw):
-        seen.append(kw["side"])
+        seen.append(kw.get("backward", False))
         return real(*args, **kw)
 
-    monkeypatch.setattr(anchors, "direct_ends", spy)
+    monkeypatch.setattr(search, "_extend", spy)
     with serve(make_settings(tmp_path), up) as c:
         body = c.get("/api/hybrid", params=HYB_OD).json()
-    assert sorted(seen) == ["head", "tail"]
-    assert {"route", "line"} <= set(body["diag"]["heads"]) and {"route", "line"} <= set(body["diag"]["tails"])
+    assert sorted(seen) == [False, False, True]
+    # 노선을 더 탄 정류장은 남은 길의 하한에 따라 남거나 잘린다 — 기준 경로 부분은 늘 있다
+    assert "route" in body["diag"]["heads"] and "route" in body["diag"]["tails"]
     assert body["diag"]["search"]["candidates"] == body["diag"]["pairs"]["candidates"]
     assert body["diag"]["search"]["candidates"] == sum(body["diag"]["search"]["status"].values())
 
@@ -1012,7 +1013,9 @@ def test_tos_guard_nothing_kept(tmp_path, up, caplog):
         # 공공데이터 도착정보는 저장이 허용되지만 15초 캐시는 메모리 전용이다 (디스크에는 건수만)
         assert c.get("/api/arrivals/stop/204000101").status_code == 200
         assert c.get("/api/arrivals/station/bundang-K222").status_code == 200
-    assert files_under(tmp_path) == created | {s.quota_path}  # 카카오 응답은 디스크에 남지 않는다
+    lock = s.quota_path.with_name(s.quota_path.name + ".lock")   # 쿼터 파일의 프로세스 사이 잠금 — 비어 있다
+    assert files_under(tmp_path) == created | {s.quota_path, lock}  # 카카오 응답은 디스크에 남지 않는다
+    assert lock.stat().st_size == 0
     assert set(json.loads(s.quota_path.read_text(encoding="utf-8"))) == {"date", "used"}  # 건수만
     for text in (KKEY, DKEY, SKEY, "수인분당선 (수원 > 정자)", "합성로1", "합성타워", "합성테크노밸리",
                  "경기70아1234", "운행종료", "정자역 출발"):

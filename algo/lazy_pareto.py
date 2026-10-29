@@ -31,6 +31,7 @@ class Candidate:
     estimate: Cost
     queries: tuple[Hashable, ...]
     lower_bound: Cost = Cost(0, 0)
+    tier: int = 0   # lower tiers are ranked first; a later tier waits until no earlier one is pending
 
     def __post_init__(self):
         # Canonical query order gives the same prefix regardless of input order.
@@ -134,6 +135,8 @@ class LazyParetoSearch:
         remaining = [c for c in self.candidates.values() if self.status[c.id] == "pending"]
         if not remaining:
             return []
+        tier = min(c.tier for c in remaining)
+        remaining = [c for c in remaining if c.tier == tier]
         if not self._seeded or not self.front:
             # Start with the same requested-VOT objective that worked at low
             # budgets, then retain that observation for every later checkpoint.

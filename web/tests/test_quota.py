@@ -30,7 +30,7 @@ def test_reserve_persists_and_reloads(tmp_path):
     q.reserve("transit")
     q.reserve("car")
     assert json.loads(path.read_text(encoding="utf-8")) == {"date": "2026-09-11", "used": {"transit": 2, "car": 1}}
-    assert [p.name for p in path.parent.iterdir()] == ["quota.json"]  # 임시 파일이 남지 않는다
+    assert sorted(p.name for p in path.parent.iterdir()) == ["quota.json", "quota.json.lock"]  # 임시 파일이 남지 않는다(잠금 파일만)
 
     q2 = QuotaGuard(path, LIMITS, clock)
     assert q2.snapshot() == {
@@ -124,3 +124,19 @@ def test_snapshot_without_file(tmp_path):
         "car": {"used": 0, "limit": 5, "remaining": 5},
     }
     assert not (tmp_path / "quota.json").exists()  # 조회만으로는 파일을 만들지 않는다
+
+
+def test_two_servers_on_one_file_add_up(tmp_path):
+    # 개발 서버와 측정용 서버가 같은 파일을 쓴다 — 서로의 건수를 덮어쓰지 않고 더한다
+    path = tmp_path / "quota.json"
+    clock = Clock(kst("2026-09-11T10:00"))
+    a, b = QuotaGuard(path, LIMITS, clock), QuotaGuard(path, LIMITS, clock)
+    a.reserve("car")
+    b.reserve("car")
+    a.reserve("transit")
+    assert a.snapshot()["car"]["used"] == b.snapshot()["car"]["used"] == 2
+    assert json.loads(path.read_text(encoding="utf-8"))["used"] == {"car": 2, "transit": 1}
+    b.reserve("transit")
+    b.reserve("transit")
+    with pytest.raises(ApiError):
+        a.reserve("transit")   # 한도도 두 서버를 합쳐 본다

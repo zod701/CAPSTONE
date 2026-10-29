@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from geoutil import EARTH_R
 
-from algo.anchors import TAXI_BASE_S, fare_type, taxi_dist_km, taxi_fare, taxi_reach_m, taxi_time_s
+from algo.anchors import fare_type, taxi_dist_km, taxi_fare, taxi_reach_m, taxi_time_s
 
 # 기준점 하나를 두고 미터로 옮겨 가며 본다 — 실제 좌표일 필요는 없고 거리 관계만 쓴다
 BASE = (127.0286, 37.2659)
@@ -27,14 +27,12 @@ def test_reach_is_inverse_of_time():
     assert taxi_time_s(*BASE, *far) == pytest.approx(t, rel=1e-6)
 
 
-def test_same_point_costs_only_the_fixed_part():
-    # 거리는 0 이어도 출발·신호 같은 고정 비용은 남는다
-    assert (taxi_dist_km(*BASE, *BASE), taxi_time_s(*BASE, *BASE)) == (0.0, TAXI_BASE_S)
-
-
-def test_reach_is_zero_below_the_fixed_part():
-    # 고정 비용보다 짧은 시간으로는 어디에도 닿지 못한다 (반경이 음수가 되면 안 된다)
-    assert taxi_reach_m(TAXI_BASE_S / 2) == 0.0
+def test_same_point_costs_nothing_and_longer_trips_cost_less_per_km():
+    # 곡선이라 거리 0 이면 0 이고, 멀리 갈수록 1 km 당 시간이 준다(큰길 · 고속화도로)
+    assert (taxi_dist_km(*BASE, *BASE), taxi_time_s(*BASE, *BASE)) == (0.0, 0.0)
+    per_km = [taxi_time_s(*BASE, *move(BASE, m, 0)) / m for m in (700, 4200, 9100)]
+    assert per_km == sorted(per_km, reverse=True)
+    assert taxi_reach_m(0) == 0.0
 
 
 def test_slope_follows_time_band():
@@ -130,6 +128,6 @@ def test_taxi_plan_is_pickup_plus_eta_plus_buffer_when_connecting():
 
 def test_taxi_minimum_distance_is_the_base_fare_distance_in_straight_line():
     from algo.anchors import TAXI_MIN_M, taxi_plan_s, taxi_s_for, walk_s
-    # 택시(호출 대기 + 이동 + 연결 버퍼)가 걷기보다 빨라지는 직선거리 — 약 258 m
-    assert taxi_plan_s(taxi_s_for(TAXI_MIN_M)) == pytest.approx(walk_s(TAXI_MIN_M)) and 250 < TAXI_MIN_M < 270
+    # 택시(호출 대기 + 이동 + 연결 버퍼)가 걷기보다 빨라지는 직선거리 — 약 150 m
+    assert taxi_plan_s(taxi_s_for(TAXI_MIN_M)) == pytest.approx(walk_s(TAXI_MIN_M), rel=1e-6) and 130 < TAXI_MIN_M < 170
     assert walk_s(TAXI_MIN_M - 10) < taxi_plan_s(taxi_s_for(TAXI_MIN_M - 10))

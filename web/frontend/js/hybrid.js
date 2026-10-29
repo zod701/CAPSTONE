@@ -5,21 +5,28 @@ import { esc } from "./api.js";
 import { fmtMin, fmtWon, chips, setExtraCards, defaultWaitText, comparisonText, recommendationBadge } from "./routes.js";
 
 // 최소 시간 대중교통 경로(서버 기준선)와 견준 값 — 절감 시간 · 추가 요금 · 원/분(시간을 줄이지 못하면 없음). 서버의 compare.saving_per_min 과 같은 식
+// 택시가 둘이면(출발지에서 택시로 기준 경로에 올라탐) 시간·거리를 더하고 "택시 2회" 로 적는다
 function legText(r) {
-  const leg = r.taxi;
-  const distance = leg.distance_m == null ? "–" : `${(leg.distance_m / 1000).toFixed(1)} km`;
-  return `대중교통 ${fmtMin(r.transit_time_s)} · 택시 ${fmtMin(leg.duration_s)} · ${distance}`;
+  const legs = [r.first_taxi?.taxi, r.taxi].filter(Boolean);
+  const km = legs.every((l) => l.distance_m != null) ? legs.reduce((a, l) => a + l.distance_m, 0) / 1000 : null;
+  const distance = km == null ? "–" : `${km.toFixed(1)} km`;
+  const label = legs.length > 1 ? "택시 2회" : "택시";
+  return `대중교통 ${fmtMin(r.transit_time_s)} · ${label} ${fmtMin(legs.reduce((a, l) => a + l.duration_s, 0))} · ${distance}`;
+}
+
+function taxiStep(leg, counted_s, from_name, to_name) {
+  return { type: "TAXI", time_s: leg.duration_s, distance_m: leg.distance_m, path: leg.path, source: leg.source,
+    fare: (leg.fare?.taxi ?? 0) + (leg.fare?.toll ?? 0), counted_s, from_name, to_name };
 }
 
 // 대중교통 구간 사이에 택시를 한 구간(TAXI)으로 끼운 경로 — 타임라인·칩이 대중교통 카드와 같은 코드로 그린다.
-// 서버가 준 자리(taxi_at)에 넣는다. from·to 가 없으면 출발지·목적지에서 바로 타고 내린다
-function combinedRoute(r) {
-  const leg = r.taxi;
-  const taxi = { type: "TAXI", time_s: leg.duration_s, distance_m: leg.distance_m, path: leg.path, source: leg.source,
-    fare: (leg.fare?.taxi ?? 0) + (leg.fare?.toll ?? 0), counted_s: r.taxi_counted_s,
-    from_name: r.from?.name, to_name: r.to?.name };
+// 서버가 준 자리(taxi_at)에 넣는다. from·to 가 없으면 출발지·목적지에서 바로 타고 내린다.
+// 첫 택시(first_taxi)가 있으면 출발지에서 기준 경로 승차 지점까지 맨 앞에 하나 더 넣는다
+export function combinedRoute(r) {
+  const taxi = taxiStep(r.taxi, r.taxi_counted_s, r.from?.name, r.to?.name);
+  const lead = r.first_taxi ? [taxiStep(r.first_taxi.taxi, r.first_taxi.counted_s, undefined, r.first_taxi.to.name)] : [];
   const steps = r.transit?.steps || [];
-  return { steps: [...steps.slice(0, r.taxi_at), taxi, ...steps.slice(r.taxi_at)] };
+  return { steps: [...lead, ...steps.slice(0, r.taxi_at), taxi, ...steps.slice(r.taxi_at)] };
 }
 
 function fareText(r) {

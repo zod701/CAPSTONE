@@ -136,3 +136,14 @@ def test_geometry_preserves_bus_types_and_uses_local_subway_color():
     assert _geometry([rail], path, *path, color)[0]["color"] == "#FABE00"
     rail["color"] = "#123456"
     assert _geometry([rail], path, *path, color)[0]["color"] == "#123456"
+
+
+def test_first_taxi_is_drawn_and_described_from_the_origin():
+    c = candidate("t", tail="destination", tail_steps=(), head_steps=[{"type": "SUBWAY", "board_name": "b", "alight_name": "uc",
+                                                                       "line_group": "1호선"}])
+    c["head"] = {**c["head"], "source": "taxi_route", "taxi_from": point("b", 127.05, 37.05)}
+    record = trace_of([c]).finish([])["candidates"][0]
+    assert record["shape"] == "택시 → 기준 경로 → 목적지"
+    assert record["itinerary"][:3] == ["출발지", "출발지에서 b까지 택시", "b에서 1호선 지하철 탑승"]
+    assert record["geometry"][0] == {"type": "TAXI", "path": [list(O), [127.05, 37.05]]}
+    assert [a["id"] for a in record["anchors"]] == ["b", "ut"]

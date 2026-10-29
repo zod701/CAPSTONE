@@ -245,6 +245,17 @@ def test_actual_seed_response_changes_the_next_choice_without_unpaid_access():
     assert fast.query_order == ["seed", "a1"]
 
 
+def test_later_tier_waits_until_earlier_tier_is_done_then_uses_the_rest():
+    rows = [candidate("near", 500, 500, ["n"]),
+            Candidate("deferred", Cost(1, 1), ("d",), tier=1)]   # 추정이 훨씬 좋아도 차례가 뒤다
+    search, _, _ = make_search(rows, {"near": Cost(500, 500), "deferred": Cost(10, 10)},
+                               baseline={"transit": Cost(1000, 1000)})
+
+    asyncio.run(search.advance(1))
+    assert search.query_order == ["n"] and search.status["deferred"] == "pending"
+    assert pairs(asyncio.run(search.advance(2))) == {(10, 10)}
+
+
 def test_no_recommendation_gain_still_explores_tradeoffs_per_query_cost():
     rows = [candidate("seed", 0, 1, ["seed"]),
             candidate("fast", 100, 10000, ["f1", "f2"]),

@@ -52,6 +52,22 @@ def test_row_leaves_origin_and_destination_ends_empty():
     assert row["from"] is None and row["taxi_at"] == 0 and row["to"]["id"] == "v"
 
 
+
+def test_row_puts_a_first_taxi_before_the_base_route_it_boards():
+    b = {"id": "b", "name": "올라타는곳", "lon": 127.03, "lat": 37.31}
+    u = {"id": "u", "name": "내리는곳", "lon": 127.1, "lat": 37.35}
+    head = [{"type": "SUBWAY", "time_s": 1800}]
+    cand = {"head": {**part("taxi_route", u, head), "taxi_from": b},
+            "tail": part("destination", {"id": "D", "name": "목적지", "lon": D[0], "lat": D[1]})}
+    first = {"path": [[0, 0], [1, 1]], "duration_s": 300}
+    result = {"head_steps": head, "tail_steps": [], "time_s": 3000, "fare": 20000, "fare_info": None,
+              "transit_time_s": 1800, "taxi_s": 690, "car": {"path": []}, "first_car": first, "first_taxi_s": 450}
+    row = _row(cand, result)
+    assert row["first_taxi"] == {"to": {"id": "b", "name": "올라타는곳", "lon": 127.03, "lat": 37.31},
+                                 "taxi": first, "counted_s": 450}
+    assert row["taxi_at"] == 1 and row["head"] == "taxi_route" and row["from"]["id"] == "u"
+    assert _row({**cand, "head": part("route", u, head)}, {**result, "first_car": None})["first_taxi"] is None
+
 def test_same_station_named_twice_makes_one_card():
     # 정류소 DB(탄현역)와 경로 응답(탄현)이 같은 역을 50 m 남짓 달리 준다 — 시간·요금이 같으면 한 카드다
     a = {"from": {"lon": 126.7620, "lat": 37.6940}, "to": None, "time_s": 1212, "fare": 8050}

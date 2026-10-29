@@ -351,13 +351,13 @@ def _calibration_report(rows, now):
           % (detour, road_speed, sec_per_km))
 
     band = anchors.taxi_band(now)
-    print("\n택시 시간 — 현재 %.0f초 + %.0f초/km(%s)  vs  원점 모형 DETOUR=%.2f · SPEED=%.1f km/h"
-          % (anchors.TAXI_BASE_S, anchors.TAXI_S_PER_KM[band], band, detour, speed))
+    print("\n택시 시간 — 현재 %.0f초 × km^%.2f × %.2f(%s)  vs  원점 모형 DETOUR=%.2f · SPEED=%.1f km/h"
+          % (anchors.TAXI_K_S, anchors.TAXI_P, anchors.TAXI_BAND[band], band, detour, speed))
     print(_line("현재 모형", _model_errors(rows, now)))
-    # 고정분은 시간대와 무관하게 두고 기울기만 맞춘다 — 직선 1 km 당 (응답 − 고정분)의 중앙값
-    per_km = _quantile([(r["dur_s"] - anchors.TAXI_BASE_S) / (r["straight_m"] / 1000) for r in rows], 0.5)
-    print(_line("기울기만 재적합 %.0f/km" % per_km,
-                [(anchors.TAXI_BASE_S + r["straight_m"] / 1000 * per_km - r["dur_s"]) / 60 for r in rows]))
+    # 곡선 모양은 두고 시간대 배수만 맞춘다 — 응답 ÷ (TAXI_K_S × km^TAXI_P) 의 중앙값
+    curve = [anchors.TAXI_K_S * (r["straight_m"] / 1000) ** anchors.TAXI_P for r in rows]
+    mult = _quantile([r["dur_s"] / c for r, c in zip(rows, curve)], 0.5)
+    print(_line("배수만 재적합 ×%.2f" % mult, [(c * mult - r["dur_s"]) / 60 for r, c in zip(rows, curve)]))
     print(_line("원점 모형", _time_errors(rows, detour, speed)))
     # 절편 모형 — 짧은 구간에서 근사가 빠르고 긴 구간에서 느리면 출발·신호 같은 고정 비용이 있다는 뜻이다
     xs = [r["straight_m"] / 1000 for r in rows]
