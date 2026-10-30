@@ -34,7 +34,7 @@ $env:PYTHONUTF8="1"
 .\.venv\Scripts\python.exe data\scripts\build_subway_seq.py       # → processed/subway_line_seq.csv, reports/subway_line_seq.md
 .\.venv\Scripts\python.exe data\scripts\build_bus_route_seq.py    # → processed/bus_route_stops.csv, reports/bus_route_stops.md
 .\.venv\Scripts\python.exe data\scripts\build_headway.py          # → processed/headway_bus.csv, headway_rail.csv, reports/headway.md
-.\.venv\Scripts\python.exe data\scripts\build_rail_runs.py        # → processed/rail_runs.csv
+.\.venv\Scripts\python.exe data\scripts\build_rail_runs.py        # → processed/rail_runs.csv · rail_express.csv
 .\.venv\Scripts\python.exe data\scripts\build_subway_live_map.py  # → processed/subway_live_stations.csv, reports/subway_live_map.md
 .\.venv\Scripts\python.exe -m pytest data/tests
 ```
@@ -81,6 +81,11 @@ GTFS 의 **버스** 시각표는 첫차~막차를 대표 배차로 균등 분배
 도착 시각 차(앞 역 정차 포함)를 모아 노선군 · 역 실체(`subway_line_seq.csv` 의 `phys_id`) 쌍별 중앙값을 낸다. 급행은 서는 역끼리만
 이웃이라 건너뛴 쌍으로 들어간다. GTFS 역은 배차표와 같은 규칙으로 우리 역에 붙인다. 배차표 스크립트와 따로 둔 것은 그쪽이 버스 원천의
 최신 파일도 다시 읽기 때문이다.
+
+**급행 정차 패턴**(`rail_express.csv`): 같은 스크립트가 쓴다. 역 순서표에서 이웃하지 않은 두 역을 잇는(건너뛰는) 열차를 정차역 순서가
+같은 것끼리 묶어, 패턴(`pattern_id`)마다 한 행 = 정차역 하나 — 순서표의 역 id, 첫 역부터의 누적 운행 초(열차별 중앙값), 묶은 열차 수,
+그 역의 시간대별 출발 횟수(`8:6|9:4`, 끝 역은 비움)다. 대상 지역 밖 역(천안 등)은 잘라 내고, 순환선은 끝과 처음을 이웃으로 본다.
+2025년 3월 평일 시각표: 1호선 31개 패턴 304회 · 9호선 3개 232회 · 경의중앙선 10개 28회 · 수인분당선 5개 22회 · 4호선 2개 7회 · 경춘선 2개 5회.
 
 **역 순서표**(`subway_line_seq.csv`): 한 행 = 순서 안의 역 하나. 순서(`chain_id`) 하나가 운영 노선 또는 지선 하나이고
 (`seoul2:성수지선` 처럼 지선은 분기역부터 시작), `loop=1` 이면 끝 역 다음이 첫 역이다. 같은 물리 역은 `phys_id` 가 같아

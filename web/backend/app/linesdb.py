@@ -10,6 +10,7 @@ from pathlib import Path
 
 FILE = "subway_line_seq.csv"
 RUNS_FILE = "rail_runs.csv"   # 역 사이 실제 운행 시간(GTFS, data/scripts/build_rail_runs.py) — 없으면 비워 둔다
+EXPRESS_FILE = "rail_express.csv"   # 급행 정차 패턴(같은 스크립트) — 없으면 급행 없이 간다
 
 
 def _join(a, b, phys):
@@ -26,7 +27,7 @@ def _join(a, b, phys):
 
 
 class LinesDB:
-    def __init__(self, rows, runs=()):
+    def __init__(self, rows, runs=(), express=()):
         seq, loop, groups, phys = {}, {}, {}, {}
         self._stations = {}   # station_id → (이름, lat, lon)
         for r in rows:
@@ -39,12 +40,23 @@ class LinesDB:
             self._stations[r["station_id"]] = (r["name"], float(r["lat"]), float(r["lon"]))
             phys[r["station_id"]] = r["phys_id"]   # 같은 역의 노선별 행(환승)을 한 실체로 묶은 키
         self._phys = phys
+        self._peers = {}   # 실체 → 그 실체의 역 id 들 (같은 역의 운영사별 행)
+        for sid, ph in phys.items():
+            self._peers.setdefault(ph, []).append(sid)
         self._runs, self._runs_any = {}, {}
         for r in runs:
             key, secs = (r["from_phys"], r["to_phys"]), float(r["run_s"])
             self._runs[(r["line_group"], *key)] = secs
             self._runs_any.setdefault(key, secs)
         self._seq = {cid: tuple(sid for _, sid in sorted(v)) for cid, v in seq.items()}
+        pats = {}
+        for r in express:
+            hours = {int(h): int(n) for h, n in (x.split(":") for x in r["trips_by_hour"].split("|") if x)}
+            pats.setdefault(r["pattern_id"], (r["line_group"], []))[1].append(
+                (int(r["seq"]), r["station_id"], float(r["cum_s"]), hours))
+        # 급행 패턴 → (노선군, 역 id 들, 첫 역부터 누적 운행 초, 역마다 {시: 출발 횟수})
+        self.express = {pid: (g, tuple(x[1] for x in sorted(v)), tuple(x[2] for x in sorted(v)), tuple(x[3] for x in sorted(v)))
+                        for pid, (g, v) in pats.items()}
         self._loop = loop
         self._by_group = {g: list(v) for g, v in groups.items()}
         n_chains = len(self._seq)
@@ -80,12 +92,14 @@ class LinesDB:
     @classmethod
     def load(cls, processed_dir):
         """processed/subway_line_seq.csv 를 읽는다. 없으면 FileNotFoundError."""
-        runs = []
-        if (Path(processed_dir) / RUNS_FILE).exists():
-            with open(Path(processed_dir) / RUNS_FILE, encoding="utf-8-sig", newline="") as f:
-                runs = list(csv.DictReader(f))
+        extra = {}
+        for name in (RUNS_FILE, EXPRESS_FILE):
+            extra[name] = []
+            if (Path(processed_dir) / name).exists():
+                with open(Path(processed_dir) / name, encoding="utf-8-sig", newline="") as f:
+                    extra[name] = list(csv.DictReader(f))
         with open(Path(processed_dir) / FILE, encoding="utf-8-sig", newline="") as f:
-            return cls(csv.DictReader(f), runs)
+            return cls(csv.DictReader(f), extra[RUNS_FILE], extra[EXPRESS_FILE])
 
     def run_s(self, line_group, a, b):
         """이웃한 두 역(a → b) 사이 실제 운행 초(앞 역 정차 포함) — 그 노선군 값, 없으면 같은 두 실체를 잇는 다른 노선군 값, 그것도 없으면 None."""
@@ -105,6 +119,10 @@ class LinesDB:
     def is_loop(self, chain_id):
         """순환선이면 True — 끝에서 처음으로 이어 붙여 구간을 뗄 수 있다."""
         return self._loop.get(chain_id, False)
+
+    def same_station(self, station_id):
+        """같은 실체(phys_id)의 다른 역 id 들 — 같은 역이 운영사별로 따로 적힌 행(청량리 1호선의 서울교통공사 · 코레일 행)."""
+        return [s for s in self._peers.get(self._phys.get(station_id), ()) if s != station_id]
 
     def station(self, station_id):
         """역의 (이름, lat, lon) — 순서표 값. 모르면 None."""

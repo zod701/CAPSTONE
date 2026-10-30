@@ -65,10 +65,16 @@ def test_road_distance_exceeds_straight_line():
 def test_bus_hop_is_a_stop_cost_plus_cruise_split_by_region_and_express():
     from algo.anchors import BUS_HOP, bus_hop_s
     # 서울 완행은 막혀 느리고, 경기는 칸 사이를 빨리 달린다 — 정류장이 촘촘할수록 고정분이 몫을 더 차지한다
-    assert bus_hop_s(0, "서울특별시", "간선") == BUS_HOP[("서울", False)][0]
+    assert bus_hop_s(0, "서울특별시", "간선") == BUS_HOP[("서울", "완행")][0]
     assert bus_hop_s(500, "서울특별시", "간선") > bus_hop_s(500, "경기도", "일반")
-    assert bus_hop_s(2000, "경기도", "직행") == pytest.approx(BUS_HOP[("경기", True)][0] + 2 / BUS_HOP[("경기", True)][1] * 3600)
+    assert bus_hop_s(2000, "경기도", "직행") == pytest.approx(BUS_HOP[("경기", "급행")][0] + 2 / BUS_HOP[("경기", "급행")][1] * 3600)
     assert bus_hop_s(800, None, "마을") == bus_hop_s(800, "경기도", "마을")   # 시도를 모르면 서울 밖으로 본다
+    assert bus_hop_s(0, "인천광역시", "간선") == BUS_HOP[("인천", "완행")][0]
+    assert bus_hop_s(0, "인천광역시", "급행간선") == BUS_HOP[("인천", "급행")][0]
+    assert bus_hop_s(800, "인천광역시", "지선", "강화군") == bus_hop_s(800, "경기도", "지선")   # 인천의 군 지역은 외곽 계수
+    assert bus_hop_s(1000, "서울특별시", "광역") == bus_hop_s(1000, "인천광역시", "광역") == pytest.approx(
+        BUS_HOP["광역"][0] + 1 / BUS_HOP["광역"][1] * 3600)   # 광역은 지역을 가르지 않는다
+
 
 def test_service_hours_keep_every_window_of_a_route_and_day(tmp_path):
     from algo.anchors import in_service, load_service_hours
