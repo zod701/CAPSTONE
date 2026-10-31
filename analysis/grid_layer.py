@@ -23,7 +23,8 @@ import json
 import math
 from pathlib import Path
 
-from grid_cbd import CELL_M, DESTS
+import kgrid
+from grid_cbd import DESTS
 
 HYBRID = ("first", "last", "both")
 RATIO_CUT = 1.5    # 유형을 가르는 시간비 — 서울 격자 중앙(약 1.6배) 아래
@@ -65,6 +66,19 @@ def cell_metrics(rows, max_rides, cap):
             "won": won, "close": close, "type": kind}
 
 
+def cell_ring(c):
+    """칸 → 경위도 사각형 고리. 칸 번호 `<크기>m_<x>_<y>` 는 국가 격자(EPSG:5179) 칸의 네 모서리를 되돌린다.
+    그 전의 칸 번호(경위도)는 위도 37.5° 등장방형 1 km 칸이다."""
+    if "m_" in c["cell"]:
+        size, x, y = (float(v) for v in c["cell"].replace("m_", "_").split("_"))
+        pts = [kgrid.to_lonlat(px, py) for px, py in ((x, y), (x + size, y), (x + size, y + size), (x, y + size), (x, y))]
+        return [[lon, lat] for lon, lat in pts]
+    hlat = math.degrees(1000.0 / 6371008.8) / 2
+    hlon = hlat / math.cos(math.radians(37.5))
+    x, y = c["lon"], c["lat"]
+    return [[x - hlon, y - hlat], [x + hlon, y - hlat], [x + hlon, y + hlat], [x - hlon, y + hlat], [x - hlon, y - hlat]]
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="격자 결과 → 칸 사각형 GeoJSON")
     ap.add_argument("src", type=Path)
@@ -84,13 +98,9 @@ def main(argv=None):
         cap = args.cap if args.cap is not None else args.cap_ratio * next(float(r["taxi_fare"]) for r in rows if r["mode"] == "taxi")
         for k, v in cell_metrics(rows, args.max_rides, cap).items():
             cells[cid][f"{k}_{dest}"] = v
-    # grid_cbd.grid_cells 와 같은 등장방형 칸 (37.5° 기준)
-    hlat = math.degrees(CELL_M / 6371008.8) / 2
-    hlon = hlat / math.cos(math.radians(37.5))
     feats = []
     for c in cells.values():
-        x, y = c["lon"], c["lat"]
-        ring = [[x - hlon, y - hlat], [x + hlon, y - hlat], [x + hlon, y + hlat], [x - hlon, y + hlat], [x - hlon, y - hlat]]
+        ring = cell_ring(c)
         feats.append({"type": "Feature", "properties": c, "geometry": {"type": "Polygon", "coordinates": [ring]}})
     params = {"src": args.src.name, "max_rides": args.max_rides, "cap": args.cap, "cap_ratio": args.cap_ratio,
               "sidos": [s for s in ("서울특별시", "인천광역시", "경기도") if any(c["sido"] == s for c in cells.values())]}

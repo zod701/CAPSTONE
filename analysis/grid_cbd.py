@@ -1,13 +1,18 @@
-"""1 km 격자 × 도심 세 곳 — 대중교통 · 택시 · 둘을 섞은 경로의 시간과 요금 (내부 추정만, 카카오 0).
+"""격자 × 도심 세 곳 — 대중교통 · 택시 · 둘을 섞은 경로의 시간과 요금 (내부 추정만, 카카오 0).
 
-출발점은 서울 · 인천 · 경기 경계 안 1 km 격자의 중심이다. 도착지는 광화문(CBD) · 강남(GBD) · 여의도(YBD).
+출발점은 서울 · 인천 · 경기 경계 안 격자 칸의 중심이다. 격자는 국가 격자 좌표(EPSG:5179)의 `--cell` m 배수로 깐다 — 통계청 격자 등과
+칸이 맞물린다. 칸 번호는 `<크기>m_<좌하단 x>_<좌하단 y>`. 도착지는 광화문(CBD) · 강남(GBD) · 여의도(YBD).
 탐색에는 이동 선호(VOT · 환승 벌점)를 넣지 않는다 — 시간만 최소로 하고, 선호는 분석에서 고르는 하이퍼파라미터로 남긴다:
 
-- **탑승 횟수 상한** `max_rides` (1~4): 노선 단위 탐색(`algo.reach`)의 회차가 곧 탑승 횟수라, 한 번 탐색하며 회차마다
-  'k 번까지 타고' 의 최소 시간을 적는다.
-- **택시 요금 상한** `cap_first` · `cap_last` (`CAPS`, 택시 한 번당): 출발 쪽은 상한마다 탐색을 따로 한다 — 그 요금 안에 택시로 갈 수
-  있는 정류장(30분 안)만 택시 시간을 표지로 넣고 출발한다. 도착 쪽은 탐색 뒤 그 요금 안에 택시로 도착지에 가는 내릴 정류장을 고른다.
+- **탑승 횟수 상한** `max_rides` (1~4): 노선 단위 탐색(`algo.reach`)의 회차가 곧 탑승 횟수라, 회차마다 'k 번까지 타고' 의 최소 시간을 적는다.
+- **택시 요금 상한** `cap_first` · `cap_last` (`CAPS`, 택시 한 번당): 그 요금 안에 택시로 가는 정류장(30분 안)만 쓴다.
 - **출발 시각** (`--band` 평시 · 첨두 · 새벽, 또는 `--at`): 배차 · 운행 시간 · 택시 시간과 요금이 시각마다 달라 시각마다 따로 돌린다.
+
+**계산 방식** (`--method`, method.md E46):
+
+- `backward`(기본): 도착지마다 거꾸로 펼쳐(걸어서 내림 1 · 도착 택시 상한마다 1) 회차별 '정류장 → 도착지' 시간 표를 한 번 만들고,
+  출발점은 걸어서 탈 정류장(1 km) · 택시로 갈 정류장에서 표의 최솟값만 고른다 — 출발점 수와 거의 무관하다.
+- `forward`: 출발 칸마다 앞으로 펼친다(걸어서 1 · 출발 택시 상한마다 1) — 견주기용. 탐색이 앞 · 뒤 같은 답을 낸다(서울 99.8%).
 
 한 행 = (칸, 도착지, 수단, cap_first, cap_last, max_rides) 의 최소 시간 경로 하나. 수단:
 
@@ -18,7 +23,7 @@
 `taxi_fare` 는 택시 요금 합이다. 배차를 모르는 노선(기본 대기)이 낀 경로는 `uncertain` 으로 표시한다(method.md E35).
 중간에 택시를 타는 꼴(대중교통 → 택시 → 대중교통)은 넣지 않았다. 통합요금 밖 노선(공항 · 시외 · 관광 버스)은 탐색에서 뺀다.
 
-    .\\.venv\\Scripts\\python.exe analysis\\grid_cbd.py --workers 12 --band 평시
+    .\\.venv\\Scripts\\python.exe analysis\\grid_cbd.py --workers 12 --band 평시 --cell 500
 """
 import argparse
 import csv
@@ -31,17 +36,17 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-for p in (ROOT, ROOT / "web" / "backend", ROOT / "data" / "scripts"):
+for p in (ROOT, ROOT / "web" / "backend", ROOT / "data" / "scripts", ROOT / "analysis"):
     sys.path.insert(0, str(p))
 
+import kgrid  # noqa: E402
 from geoutil import haversine_m  # noqa: E402
 
-CELL_M = 1000.0
 ACCESS_M = 1000.0            # 걸어서 타고 내리는 정류장 반경 — 내부 추정 검증(method.md E34)과 같은 값
 MAX_RIDES = 4
 LIMIT_S = 4 * 3600.0
 # 택시 한 번의 요금 상한(원) — 분석에서 고른다(통행 택시비의 비율 상한 등). 4,800원은 기본요금 — 택시를 잠깐이라도 섞는 최소 비용.
-# 고른 상한이 두 값 사이면 아래 값으로 계산한 경로만 쓰므로 촘촘할수록 근사가 작다. 상한 하나가 칸마다 탐색 한 번이다
+# 고른 상한이 두 값 사이면 아래 값으로 계산한 경로만 쓰므로 촘촘할수록 근사가 작다. 상한 하나가 탐색 한 번이다
 CAPS = (4800, 6000, 7000, 8500, 10000, 12000, 15000, 20000, 30000)
 BANDS = {"평시": "2026-11-04T14:00", "첨두": "2026-11-04T08:00", "새벽": "2026-11-04T05:30"}   # 수요일
 DESTS = {"CBD": ("광화문", 126.9765, 37.5709), "GBD": ("강남", 127.0276, 37.4979), "YBD": ("여의도", 126.9243, 37.5216)}
@@ -51,31 +56,33 @@ EXCLUDED_TYPES = frozenset({"공항", "시외", "관광"})
 _G = {}
 
 
-def grid_cells(boundaries):
-    """서울 · 인천 · 경기 경계 안 1 km 격자 중심 → [(cell_id, lon, lat, 시도, 시군구)]. 격자는 위도 37.5° 의 등장방형 근사다."""
+def grid_cells(boundaries, cell_m):
+    """서울 · 인천 · 경기 경계 안 국가 격자 칸의 중심 → [(칸 번호, lon, lat, 시도, 시군구)]. 칸은 EPSG:5179 의 cell_m 배수."""
     import json
     from regions import RegionIndex
+    from shapely.geometry import shape
     fc = json.loads(Path(boundaries).read_text(encoding="utf-8"))
     xs, ys = [], []
     for f in fc["features"]:
         if f["properties"]["sido_nm"] in SIDOS:
-            from shapely.geometry import shape
-            b = shape(f["geometry"]).bounds
-            xs += [b[0], b[2]]
-            ys += [b[1], b[3]]
-    dlat = math.degrees(CELL_M / 6371008.8)
-    dlon = dlat / math.cos(math.radians(37.5))
-    pts = [(min(xs) + (i + 0.5) * dlon, min(ys) + (j + 0.5) * dlat)
-           for j in range(int((max(ys) - min(ys)) / dlat) + 1) for i in range(int((max(xs) - min(xs)) / dlon) + 1)]
+            lo0, la0, lo1, la1 = shape(f["geometry"]).bounds
+            for lo, la in ((lo0, la0), (lo0, la1), (lo1, la0), (lo1, la1), ((lo0 + lo1) / 2, la0), ((lo0 + lo1) / 2, la1)):
+                x, y = kgrid.to_xy(lo, la)
+                xs.append(x)
+                ys.append(y)
+    x0, y0 = math.floor(min(xs) / cell_m) * cell_m, math.floor(min(ys) / cell_m) * cell_m
+    corners = [(x0 + i * cell_m, y0 + j * cell_m) for j in range(int((max(ys) - y0) // cell_m) + 1)
+               for i in range(int((max(xs) - x0) // cell_m) + 1)]
+    centers = [kgrid.to_lonlat(x + cell_m / 2, y + cell_m / 2) for x, y in corners]
     idx = RegionIndex(boundaries, snap_max_m=0.0)
     out = []
-    for (lon, lat), r in zip(pts, idx.assign([p[0] for p in pts], [p[1] for p in pts])):
+    for (x, y), (lon, lat), r in zip(corners, centers, idx.assign([c[0] for c in centers], [c[1] for c in centers])):
         if r.get("sido_nm") in SIDOS and r.get("region_method") == "contain":
-            out.append(("%.5f_%.5f" % (lon, lat), lon, lat, r["sido_nm"], r["sgg_nm"]))
+            out.append(("%dm_%d_%d" % (cell_m, x, y), lon, lat, r["sido_nm"], r["sgg_nm"]))
     return out
 
 
-def _init(at_iso):
+def _init(at_iso, method):
     import algo  # noqa: F401
     from algo import anchors, fares, reach, search
     from algo.cli import load_dbs
@@ -84,9 +91,12 @@ def _init(at_iso):
     net = reach.network(dbs["stops"], dbs["routes"], dbs["lines"], EXCLUDED_TYPES)
     at = datetime.fromisoformat(at_iso)
     _G.update(anchors=anchors, fares=fares, reach=reach, search=search, dbs=dbs, net=net, at=at,
-              waits=reach._Waits(net, dbs["headway"], dbs["hours"], at))
+              waits=reach._Waits(net, dbs["headway"], dbs["hours"], at), cache={})
     _G["dests"] = {k: _dest(lon, lat) for k, (_, lon, lat) in DESTS.items()}
-    _G["outs"] = {n for d in _G["dests"].values() for n in (*d["walk"], *(t[0] for t in d["taxi"]))}
+    if method == "backward":
+        _back_tables()
+    else:
+        _G["outs"] = {n for d in _G["dests"].values() for n in (*d["walk"], *(t[0] for t in d["taxi"]))}
 
 
 def _nodes_near(pt, radius_m):
@@ -126,8 +136,136 @@ def _dest(lon, lat):
             ts, tf = _taxi(d, s, sgg, False)
             if _cap_index(tf) is not None:
                 taxi.append((n, ts, tf, _cap_index(tf)))
-    return {"pt": (lon, lat), "sgg": sgg, "walk": walk, "taxi": taxi}
+    return {"pt": (lon, lat), "sgg": sgg, "walk": walk, "taxi": taxi, "taxi_fare": {t[0]: t[2] for t in taxi}}
 
+
+def _first_taxi(o, sgg):
+    """출발점에서 택시로 갈 정류장(30분 안 · 약 150 m 이상 · 가장 큰 상한 안) → {정류장: (택시 초, 택시 요금)}."""
+    a = _G["anchors"]
+    out = {}
+    for n, (d, s) in _nodes_near(o, a.taxi_reach_m(a.T_MAX_S, _G["at"])).items():
+        if d >= a.TAXI_MIN_M:
+            ts, tf = _taxi(d, sgg, s, True)
+            if tf <= CAPS[-1]:
+                out[n] = (ts, tf)
+    return out
+
+
+def _path_info(entry, node, backward=False):
+    """표지의 부모 하나 → (승차 수, 대중교통 요금, 배차 모르는 승차가 있나, 끝 정류장). 끝 정류장은 정방향이면 출발 쪽 시작,
+    역방향이면 도착지 쪽 끝이다. 같은 부모는 칸이 달라도 같은 경로라 일꾼 안에서 한 번만 계산한다."""
+    key = (id(entry), node)   # 출발 표지 ("access",) 는 모든 정류장이 같은 객체라 정류장도 키에 넣는다
+    cache = _G["cache"]
+    if key not in cache:
+        reach, search, fares, net, waits = _G["reach"], _G["search"], _G["fares"], _G["net"], _G["waits"]
+        end, path = reach.legs(net, {node: entry}, node, backward)
+        rides = [leg for leg in path if leg[0] == "ride"]
+        steps, fallback = search._ride_steps(net, waits, path)
+        fare = fares.estimate(steps, fallback, at=_G["at"])["value"] if steps else 0.0
+        unknown = not all(waits.known(p, i, j) for _, p, i, j in rides)
+        cache[key] = (len(rides), fare, unknown, end)
+    return cache[key]
+
+
+def _base(cell, key, dest):
+    cid, lon, lat, sido, sgg = cell
+    base = {"cell": cid, "lon": round(lon, 5), "lat": round(lat, 5), "sido": sido, "sgg": sgg, "dest": key,
+            "straight_m": round(haversine_m(lon, lat, *dest["pt"]))}
+    ts, tf = _taxi(base["straight_m"], sgg, dest["sgg"], False)
+    taxi = {**base, "mode": "taxi", "cap_first": "", "cap_last": "", "max_rides": 0, "time_s": round(ts),
+            "rides": 0, "transit_fare": 0, "taxi_fare": round(tf), "uncertain": 0}
+    return base, taxi
+
+
+def _row(base, cap_first, cap_last, k, t, info, taxi_fare):
+    rides, fare, unknown, _ = info
+    mode = {(False, False): "transit", (True, False): "first", (False, True): "last",
+            (True, True): "both"}[(cap_first is not None, cap_last is not None)]
+    return {**base, "mode": mode, "cap_first": cap_first or "", "cap_last": cap_last or "", "max_rides": k,
+            "time_s": round(t), "rides": rides, "transit_fare": round(fare), "taxi_fare": round(taxi_fare),
+            "uncertain": int(unknown)}
+
+
+# --- 거꾸로(backward): 도착지마다 표 한 번, 출발점은 표에서 고르기
+
+def _back_tables():
+    """도착지 × (걸어서 내림 · 도착 택시 상한) 마다 거꾸로 펼친 회차별 표 → _G["tables"][(도착지, cap_last)] = [(초 배열, 부모 배열)] × 회차.
+    배열은 정류장 번호(_G["index"]) 순서, 닿지 못한 정류장은 inf."""
+    import numpy as np
+    reach, net, waits = _G["reach"], _G["net"], _G["waits"]
+    nodes = list(net.at)
+    index = {n: i for i, n in enumerate(nodes)}
+    _G.update(np=np, nodes=nodes, index=index, tables={})
+    empty = (np.full(len(nodes), np.inf), np.empty(len(nodes), dtype=object))
+    for key, dest in _G["dests"].items():
+        prev = (None, -1)
+        for c in (None, *CAPS):
+            seeds = dict(dest["walk"]) if c is None else {n: ts for n, ts, tf, _ in dest["taxi"] if tf <= c}
+            if c is not None and prev[0] is not None and len(seeds) == prev[1]:   # 상한 안 정류장이 늘지 않으면 앞 표 그대로
+                _G["tables"][(key, c)] = _G["tables"][(key, prev[0])]
+                continue
+            snaps = {}
+
+            def on_round(k, tau, par):
+                t, pp = np.full(len(nodes), np.inf), np.empty(len(nodes), dtype=object)
+                for n, v in tau.items():
+                    i = index.get(n)
+                    if i is not None:
+                        t[i], pp[i] = v, par[n]
+                snaps[k] = (t, pp)
+
+            if seeds:
+                reach.search(net, waits, seeds, limit_s=LIMIT_S, max_rides=MAX_RIDES, backward=True, on_round=on_round)
+            per, last = [], empty
+            for k in range(1, MAX_RIDES + 1):
+                last = snaps.get(k, last)
+                per.append(last)
+            _G["tables"][(key, c)] = per
+            prev = (c, len(seeds)) if c is not None else (None, -1)
+
+
+def _one_back(cell):
+    np, index, nodes, tables, a = _G["np"], _G["index"], _G["nodes"], _G["tables"], _G["anchors"]
+    cid, lon, lat, sido, sgg = cell
+    near = _nodes_near((lon, lat), ACCESS_M)
+    wi = np.array([index[n] for n in near], dtype=np.int64)
+    wv = np.array([a.walk_s(d) for d, _ in near.values()])
+    first = _first_taxi((lon, lat), sgg)
+    order = sorted(first, key=lambda n: first[n][1])   # 택시 요금 순 — 상한마다 앞부분에서 최솟값
+    fi = np.array([index[n] for n in order], dtype=np.int64)
+    fts = np.array([first[n][0] for n in order])
+    ftf = np.array([first[n][1] for n in order])
+    upto = [int(np.searchsorted(ftf, c, side="right")) for c in CAPS]   # 상한 c 안의 정류장 = 앞에서 upto 개
+    ar = np.arange(len(fi))
+    rows = []
+    for key, dest in _G["dests"].items():
+        base, taxi_row = _base(cell, key, dest)
+        rows.append(taxi_row)
+        for cap_last in (None, *CAPS):
+            for k, (t, pp) in enumerate(tables[(key, cap_last)], 1):
+                if len(wi):   # 걸어서 탄다 — 대중교통만 · 도착 택시
+                    v = wv + t[wi]
+                    j = int(np.argmin(v))
+                    if np.isfinite(v[j]):
+                        n = nodes[wi[j]]
+                        info = _path_info(pp[wi[j]], n, backward=True)
+                        ltf = dest["taxi_fare"][info[3]] if cap_last is not None else 0.0
+                        rows.append(_row(base, None, cap_last, k, v[j], info, ltf))
+                if len(fi):   # 택시로 탄다 — 상한 안 정류장의 앞부분 최솟값(누적)
+                    v = fts + t[fi]
+                    pm = np.minimum.accumulate(v)
+                    at = np.maximum.accumulate(np.where(v <= pm, ar, -1))   # 앞부분 최솟값이 있는 위치
+                    for c, u in zip(CAPS, upto):
+                        if u == 0 or not np.isfinite(pm[u - 1]):
+                            continue
+                        j = int(at[u - 1])
+                        info = _path_info(pp[fi[j]], nodes[fi[j]], backward=True)
+                        ltf = dest["taxi_fare"][info[3]] if cap_last is not None else 0.0
+                        rows.append(_row(base, c, cap_last, k, v[j], info, ftf[j] + ltf))
+    return rows
+
+
+# --- 앞으로(forward): 출발 칸마다 펼치기 — 견주기용
 
 def _rounds(seeds):
     """seeds {정류장: 초} 에서 탐색 → 회차 k = 1..MAX_RIDES 마다 {내릴 후보 정류장: (초, 부모)} (일찍 끝나면 앞 회차 값을 잇는다)."""
@@ -162,44 +300,21 @@ def _exits(snap, dest):
     return walk, taxi
 
 
-def _path_info(entry, node, cache):
-    """표지의 부모 하나 → (승차 수, 대중교통 요금, 배차 모르는 승차가 있나, 시작 정류장)."""
-    key = (id(entry), node)   # 출발 표지 ("access",) 는 모든 정류장이 같은 객체라 정류장도 키에 넣는다
-    if key not in cache:
-        reach, search, fares, net, waits = _G["reach"], _G["search"], _G["fares"], _G["net"], _G["waits"]
-        start, path = reach.legs(net, {node: entry}, node)
-        rides = [leg for leg in path if leg[0] == "ride"]
-        steps, fallback = search._ride_steps(net, waits, path)
-        fare = fares.estimate(steps, fallback, at=_G["at"])["value"] if steps else 0.0
-        unknown = not all(waits.known(p, i, j) for _, p, i, j in rides)
-        cache[key] = (len(rides), fare, unknown, start)
-    return cache[key]
-
-
-def _one(cell):
+def _one_forward(cell):
     cid, lon, lat, sido, sgg = cell
     a = _G["anchors"]
-    o = (lon, lat)
-    first_taxi = {}
-    for n, (d, s) in _nodes_near(o, a.taxi_reach_m(a.T_MAX_S, _G["at"])).items():
-        if d >= a.TAXI_MIN_M:
-            ts, tf = _taxi(d, sgg, s, True)
-            if tf <= CAPS[-1]:
-                first_taxi[n] = (ts, tf)
-    searches = {None: _rounds({n: a.walk_s(d) for n, (d, _) in _nodes_near(o, ACCESS_M).items()})}
+    _G["cache"] = {}   # 칸마다 새로 펼쳐 지난 칸의 부모는 사라진다 — 같은 메모리 주소(id)를 다른 부모가 받으면 캐시가 엉뚱한 경로를 준다
+    first_taxi = _first_taxi((lon, lat), sgg)
+    searches = {None: _rounds({n: a.walk_s(d) for n, (d, _) in _nodes_near((lon, lat), ACCESS_M).items()})}
     prev = (None, -1)
     for c in CAPS:   # 상한마다 그 요금 안 정류장만 택시 시간으로 출발 — 정류장이 늘지 않으면 앞 결과를 쓴다
         seeds = {n: ts for n, (ts, tf) in first_taxi.items() if tf <= c}
         searches[c] = searches[prev[0]] if len(seeds) == prev[1] else _rounds(seeds)
         prev = (c, len(seeds))
-
-    rows, cache = [], {}
+    rows = []
     for key, dest in _G["dests"].items():
-        base = {"cell": cid, "lon": round(lon, 5), "lat": round(lat, 5), "sido": sido, "sgg": sgg, "dest": key,
-                "straight_m": round(haversine_m(lon, lat, *dest["pt"]))}
-        ts, tf = _taxi(base["straight_m"], sgg, dest["sgg"], False)
-        rows.append({**base, "mode": "taxi", "cap_first": "", "cap_last": "", "max_rides": 0, "time_s": round(ts),
-                     "rides": 0, "transit_fare": 0, "taxi_fare": round(tf), "uncertain": 0})
+        base, taxi_row = _base(cell, key, dest)
+        rows.append(taxi_row)
         for cap_first, per_round in searches.items():
             for k, snap in enumerate(per_round, 1):
                 walk, taxi = _exits(snap, dest)
@@ -207,13 +322,9 @@ def _one(cell):
                     if ex is None:
                         continue
                     t, n, _, ltf = ex
-                    rides, fare, unknown, start = _path_info(snap[n][1], n, cache)
-                    ftf = first_taxi[start][1] if cap_first is not None else 0.0
-                    mode = {(False, False): "transit", (True, False): "first", (False, True): "last",
-                            (True, True): "both"}[(cap_first is not None, cap_last is not None)]
-                    rows.append({**base, "mode": mode, "cap_first": cap_first or "", "cap_last": cap_last or "",
-                                 "max_rides": k, "time_s": round(t), "rides": rides, "transit_fare": round(fare),
-                                 "taxi_fare": round(ftf + ltf), "uncertain": int(unknown)})
+                    info = _path_info(snap[n][1], n)
+                    ftf = first_taxi[info[3]][1] if cap_first is not None else 0.0
+                    rows.append(_row(base, cap_first, cap_last, k, t, info, ftf + ltf))
     return rows
 
 
@@ -222,8 +333,10 @@ COLUMNS = ["cell", "lon", "lat", "sido", "sgg", "dest", "straight_m", "mode", "c
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description="1 km 격자 × 도심 세 곳 — 대중교통 · 택시 · 하이브리드 (내부 추정)")
+    ap = argparse.ArgumentParser(description="격자 × 도심 세 곳 — 대중교통 · 택시 · 하이브리드 (내부 추정)")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--cell", type=int, default=1000, help="격자 칸 크기(m) — 국가 격자(EPSG:5179) 배수")
+    ap.add_argument("--method", choices=("backward", "forward"), default="backward")
     ap.add_argument("--limit", type=int, default=0, help="고르게 N 칸만 (시험용)")
     ap.add_argument("--sido", choices=SIDOS, default=None, help="이 시도의 칸만 출발점으로 (도착지는 그대로)")
     ap.add_argument("--band", choices=list(BANDS), default=None, help="출발 시각대 — " + " · ".join(
@@ -235,22 +348,24 @@ def main(argv=None):
     if not (args.band or args.at):
         ap.error("--band 나 --at 중 하나를 준다")
     at = args.at or BANDS[args.band]
-    cells = grid_cells(ROOT / "data" / "processed" / "admin_sgg.geojson")
+    cells = grid_cells(ROOT / "data" / "processed" / "admin_sgg.geojson", args.cell)
     if args.sido:
         cells = [c for c in cells if c[3] == args.sido]
     if args.limit:
         cells = cells[:: max(1, len(cells) // args.limit)][: args.limit]
     tag = (args.band or at[:16].replace(":", "").replace("-", "")) + (f"_{args.sido[:2]}" if args.sido else "")
+    tag += f"_{args.cell}m" + ("_fwd" if args.method == "forward" else "")
     out = args.out or ROOT / "analysis" / "out" / f"grid_cbd_{tag}.csv.gz"
     out.parent.mkdir(parents=True, exist_ok=True)
-    print("격자 %d 칸 × 도착지 %d = OD %d · 시각 %s · 일꾼 %d → %s" % (len(cells), len(DESTS), len(cells) * len(DESTS), at, args.workers, out),
-          flush=True)
+    print("격자 %d m · %d 칸 × 도착지 %d = OD %d · 시각 %s · %s · 일꾼 %d → %s" % (
+        args.cell, len(cells), len(DESTS), len(cells) * len(DESTS), at, args.method, args.workers, out), flush=True)
+    one = _one_back if args.method == "backward" else _one_forward
     t0, done = time.perf_counter(), 0
     with gzip.open(out, "wt", encoding="utf-8", newline="") as f, \
-            ProcessPoolExecutor(args.workers, initializer=_init, initargs=(at,)) as pool:
+            ProcessPoolExecutor(args.workers, initializer=_init, initargs=(at, args.method)) as pool:
         w = csv.DictWriter(f, COLUMNS)
         w.writeheader()
-        for rows in pool.map(_one, cells, chunksize=8):
+        for rows in pool.map(one, cells, chunksize=8):
             w.writerows(rows)
             done += 1
             if done % 500 == 0:
