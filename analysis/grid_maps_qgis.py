@@ -12,7 +12,8 @@ from qgis.core import (QgsCategorizedSymbolRenderer, QgsCoordinateReferenceSyste
                        QgsFillSymbol, QgsGeometry, QgsGraduatedSymbolRenderer, QgsLayoutExporter,
                        QgsLayoutItemLabel, QgsLayoutItemLegend, QgsLayoutItemMap, QgsLayoutMeasurement, QgsLayoutPoint,
                        QgsLayoutSize, QgsLegendStyle, QgsMarkerSymbol, QgsPointXY, QgsPrintLayout, QgsProject,
-                       QgsRectangle, QgsRendererCategory, QgsRendererRange, QgsSingleSymbolRenderer, QgsTextFormat,
+                       QgsRectangle, QgsRendererCategory, QgsRendererRange, QgsRuleBasedRenderer, QgsSingleSymbolRenderer,
+                       QgsTextFormat,
                        QgsUnitTypes, QgsVectorLayer)
 from qgis.PyQt.QtGui import QFont
 
@@ -37,7 +38,8 @@ CLOSE = [(-1.5, -0.5, "#8e5cc4", "하이브리드로만 갈 수 있음"), (-0.5,
          (0.75, 1.0, "#91cf60", "75–100%"), (1.0, 99, "#1a9850", "100% 이상 (택시보다 빠름)")]
 TYPES = [("good", "#2c6fbb", "대중교통 양호 (시간비 1.5 미만)"), ("firstlast", "#3a9d5d", "첫·끝 구간 문제 (회수율 50% 이상)"),
          ("trunk", "#d64545", "간선 부족 (회수율 50% 미만)"), ("hybrid_only", "#8e5cc4", "하이브리드로만 갈 수 있음"),
-         ("nohybrid", "#b8a07e", "택시를 섞을 여지 없음 (상한 안 하이브리드 없음)")]
+         ("nohybrid", "#b8a07e", "택시 예산 < 기본요금|(가까워서 택시를 섞을 여지 없음)")]
+NOHYBRID = ("#b8a07e", "택시 예산 < 기본요금|(가까워서 택시를 섞을 여지 없음)")   # save · close 에서도 같은 색
 CONDITION = (f"탑승 ≤ {PARAMS['max_rides']}번 · 택시비 합 ≤ "   # 제목 오른쪽에 붙인다
              + (f"택시만 요금 × {PARAMS['cap_ratio']:g}" if PARAMS.get("cap_ratio") else f"{PARAMS['cap']:,.0f}원"))
 
@@ -52,6 +54,18 @@ def categorized(cats):
 
 def graduated(bins):
     return lambda field: QgsGraduatedSymbolRenderer(field, [QgsRendererRange(lo, hi, fill(c), lab) for lo, hi, c, lab in bins])
+
+
+def with_nohybrid(bins):
+    """save · close — 대중교통 경로는 있는데 택시비 상한 안의 하이브리드가 없는 칸(save 빈값)을 '경로 없음' 회색과 따로 칠한다.
+    비율 상한이면 도착지 둘레(상한이 기본요금 4,800원도 안 되는 거리)가 여기 든다."""
+    def make(field):
+        dest = field.rsplit("_", 1)[1]
+        rend = QgsRuleBasedRenderer.convertFromRenderer(graduated(bins)(field))
+        rend.rootRule().appendChild(QgsRuleBasedRenderer.Rule(
+            fill(NOHYBRID[0]), filterExp=f'"save_{dest}" IS NULL AND "ratio_{dest}" IS NOT NULL', label=NOHYBRID[1]))
+        return rend
+    return make
 
 
 p = QgsProject.instance()
@@ -96,7 +110,7 @@ def text(lay, s, x, y, w, h, size, bold=False):
     return it
 
 
-GRAY = {"won": "대중교통 경로 없음 · 1분 넘게 못 아낌", "close": "경로 없음 · 메울 격차 없음 · 상한 안 하이브리드 없음",
+GRAY = {"won": "대중교통 경로 없음 · 1분 넘게 못 아낌", "close": "대중교통 경로 없음 · 메울 격차 없음(대중교통이 택시보다 빠름)",
         "type": "대중교통 · 하이브리드 경로 없음"}   # 회색 칸이 뜻하는 것 — 지도마다 다르다(그 밖은 '대중교통 경로 없음')
 
 
@@ -138,6 +152,7 @@ def make(name, title, renderer_for, show_base, formula=None):
     if show_base:
         root.addLayer(base).setName(GRAY.get(name, "대중교통 경로 없음"))
     leg.setTitle("")
+    leg.setWrapString("|")   # 긴 범례 항목은 | 에서 줄을 바꾼다
     for style in (QgsLegendStyle.SymbolLabel, QgsLegendStyle.Group, QgsLegendStyle.Subgroup):
         tf = QgsTextFormat()
         tf.setFont(QFont(FONT))
@@ -154,9 +169,9 @@ def make(name, title, renderer_for, show_base, formula=None):
 
 make("best", "도심까지 가장 빠른 수단", categorized(BEST), False)
 make("ratio", "대중교통 ÷ 택시 소요시간", graduated(RATIO), True)
-make("save", "하이브리드 경로로 아끼는 시간", graduated(SAVE), True)
+make("save", "하이브리드 경로로 아끼는 시간", with_nohybrid(SAVE), True)
 make("won", "택시를 섞을 때 아낀 1분당 추가 비용", graduated(WON), True)
-make("close", "하이브리드 격차 회수율", graduated(CLOSE), True,
+make("close", "하이브리드 격차 회수율", with_nohybrid(CLOSE), True,
      "= (대중교통만 − 하이브리드) ÷ (대중교통만 − 택시만) 소요시간")
 make("type", "대중교통 여건 유형", categorized(TYPES), True)
 
@@ -164,7 +179,7 @@ make("type", "대중교통 여건 유형", categorized(TYPES), True)
 # --- GeoPackage (같은 이름 .gpkg): grid = 칸 지표 · ratio · save · won · close · type = 그 지표만 담은 칸 · sgg · dests (원자료는 grid_cbd 의
 # .csv.gz — 하이퍼파라미터 조합마다 행이 있어 크다). grid 에는 지도 18개(지표 × 도착지) 스타일을 함께 저장한다 — 기본은 best_CBD, 빈값은 그리지 않는다.
 # ratio · save · won · close · type 에는 도착지 3개 스타일을 저장하고(기본 CBD), 빈값(대중교통 경로 없음)은 PNG 처럼 회색으로 그린다.
-from qgis.core import QgsRuleBasedRenderer, QgsVectorFileWriter  # noqa: E402
+from qgis.core import QgsVectorFileWriter  # noqa: E402
 
 GPKG = os.path.splitext(GRID)[0] + ".gpkg"  # noqa: F821
 if os.path.exists(GPKG):   # 같은 이름으로 다시 그리면 지난 실행의 레이어가 파일을 잡고 있다 — 놓게 한 뒤 지운다
@@ -202,8 +217,8 @@ for table, layer in (("sgg", sgg), ("dests", pts["CBD"])):
     saved.setRenderer(layer.renderer().clone())
     saved.saveStyleToDatabase(table, "", True, "")
 grid = QgsVectorLayer(f"{GPKG}|layername=grid", "grid", "ogr")
-RENDERERS = {"best": categorized(BEST), "ratio": graduated(RATIO), "save": graduated(SAVE), "won": graduated(WON),
-             "close": graduated(CLOSE), "type": categorized(TYPES)}
+RENDERERS = {"best": categorized(BEST), "ratio": graduated(RATIO), "save": with_nohybrid(SAVE), "won": graduated(WON),
+             "close": with_nohybrid(CLOSE), "type": categorized(TYPES)}
 styles = [(f"{name}_{k}", rend) for name, rend in RENDERERS.items() for k, *_ in DESTS]
 for i, (name, rend) in enumerate(styles):
     grid.setRenderer(rend(name))

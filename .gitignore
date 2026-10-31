@@ -9,6 +9,7 @@ __pycache__/
 .pytest_cache/
 
 # 공간 파일 (분석 스크립트로 다시 만든다). 저장소에 둘 것은 아래 data/processed 의 예외(!)로 되살린다
+*.gz
 *.geojson
 *.gpkg
 *.gpkg-shm
