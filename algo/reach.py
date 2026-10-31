@@ -18,6 +18,9 @@ from app.wait import WEEKDAY, _route_headway, day_type, rail_hour
 from algo import anchors
 
 TRANSFER_M = 300.0          # 갈아탈 때 걸어서 옮겨 갈 수 있는 정류장 거리
+# 노선 하나를 훑을 때 들고 가는 탈 정류장 후보 수 — 대기가 타고 내리는 두 정류장으로 정해져(매력 노선) 탈 곳 하나를 미리 정하면
+# 더 좋은 조합을 놓친다. 후보마다 내릴 곳에서 실제 대기로 견준다(method.md E46)
+BOARD_CANDIDATES = 10
 
 
 class Network:
@@ -225,14 +228,22 @@ def search(net, waits, access, *, limit_s, max_rides, backward=False, rest=None,
     `rest(정류장)` 을 주면 그 정류장에서 나머지 길(정방향은 목적지까지, 역방향은 출발지에서)의 하한을 더해 `limit_s` 와 견준다.
     `on_round(k, tau, par)` 를 주면 회차 k 가 끝날 때마다 부른다 — 그때의 표지는 'k 번까지 타고' 갈 수 있는 최소 시간이다.
     더 나아질 정류장이 없어 일찍 끝나면 남은 회차는 부르지 않는다(그 뒤 회차의 값은 마지막 값과 같다).
+
+    돌려주는 표지는 **끝낼 수 있는 시각**뿐이다 — 시작 표지와 차에서 내린(역방향은 차를 탄) 시각. 내린 뒤 300 m 걸어 옮긴 시각은
+    다음 차를 탈 때만 쓰고 돌려주지 않는다 — 걸어서 닿는 것은 양 끝의 도보(호출자의 1 km)와 두 차 사이의 갈아타기뿐이다(method.md E46).
     """
     rest = rest or (lambda node: 0.0)
-    tau = dict(access)
+    tau = dict(access)        # 끝낼 수 있는 표지 — 시작 표지 · 차에서 내린 시각
     par = {n: ("access",) for n in access}
+    wtau, wpar = {}, {}       # 갈아타려고 걸어 닿은 시각 — 다음 차를 탈 때만 쓴다
     marked = set(access)
     for k in range(1, max_rides + 1):
-        snap = {n: tau[n] for n in marked}
-        snap_par = {n: par[n] for n in marked}
+        snap, snap_par = {}, {}   # 탈 수 있는 시각 — 내린 시각과 걸어 닿은 시각 중 이른 것
+        for n in marked:
+            if wtau.get(n, inf) < tau.get(n, inf):
+                snap[n], snap_par[n] = wtau[n], wpar[n]
+            else:
+                snap[n], snap_par[n] = tau[n], par[n]
         start = {}
         for n in marked:
             for p, i in net.at.get(n, ()):
@@ -241,34 +252,38 @@ def search(net, waits, access, *, limit_s, max_rides, backward=False, rest=None,
         improved = set()
         for p, s in start.items():
             kind, nodes, cum = net.patterns[p][0], net.patterns[p][3], net.patterns[p][4]
-            best, base, held, held_par = inf, inf, None, None
+            cands = []   # (순위 값, base, 위치, 부모) — 순위 값이 작은 BOARD_CANDIDATES 개
             idx = range(s, len(nodes)) if not backward else range(s, -1, -1)
+            extra = anchors.RAIL_STATION_S if kind == "subway" else 0.0
             for i in idx:
                 n = nodes[i]
-                if held is not None:
-                    # 정방향: held 에서 타서 i 에 내림. 역방향: i 에서 타서 held 에 내림. 대기는 타고 내리는 두 정류장으로 정한다
-                    t = base + cum[i] if not backward else base - cum[i]
-                    if t < tau.get(n, inf):   # 대기 없이도 못 줄이면 대기를 셀 필요가 없다
-                        t += waits.ride_wait(p, held, i) + (anchors.RAIL_STATION_S if kind == "subway" else 0.0)
-                        if t < tau.get(n, inf) and t + rest(n) <= limit_s:
-                            tau[n] = t
-                            par[n] = (("ride", p, held, i, k, held_par) if not backward
-                                      else ("ride", p, i, held, k, held_par))
-                            improved.add(n)
+                best_t, best_c = tau.get(n, inf), None
+                for c in cands:
+                    # 정방향: c 에서 타서 i 에 내림. 역방향: i 에서 타서 c 에 내림. 대기는 타고 내리는 두 정류장으로 정한다
+                    t = c[1] + cum[i] if not backward else c[1] - cum[i]
+                    if t < best_t:   # 대기 없이도 못 줄이면 대기를 셀 필요가 없다
+                        t += waits.ride_wait(p, c[2], i) + extra
+                        if t < best_t:
+                            best_t, best_c = t, c
+                if best_c is not None and best_t + rest(n) <= limit_s:
+                    tau[n] = best_t
+                    par[n] = (("ride", p, best_c[2], i, k, best_c[3]) if not backward
+                              else ("ride", p, i, best_c[2], k, best_c[3]))
+                    improved.add(n)
                 if n in snap:
-                    # 탈 정류장은 노선 하나의 대기로 고른다 — 내릴 곳을 아직 모른다
-                    cand = snap[n] + waits.wait(p, n) - cum[i] if not backward else snap[n] + cum[i]
-                    if cand < best:
-                        best, held, held_par = cand, i, snap_par[n]
-                        base = snap[n] - cum[i] if not backward else snap[n] + cum[i]
+                    # 탈 정류장 후보는 노선 하나의 대기로 줄 세운다 — 내릴 곳을 아직 모른다
+                    rank = snap[n] + waits.wait(p, n) - cum[i] if not backward else snap[n] + cum[i]
+                    if len(cands) < BOARD_CANDIDATES or rank < cands[-1][0]:
+                        cands.append((rank, snap[n] - cum[i] if not backward else snap[n] + cum[i], i, snap_par[n]))
+                        cands.sort(key=lambda c: c[0])
+                        del cands[BOARD_CANDIDATES:]
         marked = set(improved)
-        rode = {n: tau[n] for n in improved}
-        for n, t_n in rode.items():   # 내린 정류장에서 걸어서 옮겨 타기 — 내린 시각에서 한 번만(걸은 표지에서 다시 걷지 않는다)
+        for n in improved:   # 내린 정류장에서 걸어서 옮겨 타기 — 두 차 사이에서 한 번만(걸어 닿은 곳에서 다시 걷지 않는다)
             for m, dist in net.neighbors(n):
-                t = t_n + anchors.walk_s(dist)
-                if t < tau.get(m, inf) and t + rest(m) <= limit_s:
-                    tau[m] = t
-                    par[m] = ("walk", n, dist, par[n])
+                t = tau[n] + anchors.walk_s(dist)
+                if t < wtau.get(m, inf) and t < tau.get(m, inf) and t + rest(m) <= limit_s:
+                    wtau[m] = t
+                    wpar[m] = ("walk", n, dist, par[n])
                     marked.add(m)
         if on_round:
             on_round(k, tau, par)

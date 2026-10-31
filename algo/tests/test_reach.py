@@ -74,11 +74,16 @@ def test_backward_gives_time_left_to_the_destination_and_respects_the_limit():
     assert ("bus", "s1") not in tight
 
 
-def test_one_walk_per_transfer_whatever_the_scan_order():
+def test_walked_stops_are_for_the_next_ride_only():
     n = net()
-    tau, par = reach.search(n, reach._Waits(n, None, None, None), {("bus", "s1"): 60.0}, limit_s=1e9, max_rides=1)
-    # s3 에서 내려 t3 까지 걷고, 거기서 다시 w5 까지 걸어 이어 가지는 않는다
-    assert par[("bus", "t3")][0] == "walk" and ("bus", "w5") not in tau
+    waits = reach._Waits(n, None, None, None)
+    tau, _ = reach.search(n, waits, {("bus", "s1"): 60.0}, limit_s=1e9, max_rides=1)
+    # s3 에서 내려 t3 로 걸어갈 수는 있지만 거기서 끝내지 않는다 — 도착지까지 걷는 것은 내린 정류장에서(양 끝 도보는 호출자의 몫)
+    assert ("bus", "s3") in tau and ("bus", "t3") not in tau and ("bus", "w5") not in tau
+    # 걸어 닿은 t3 에서는 다음 차(B)를 탄다. t3 에서 w5 로 다시 걸어 C 를 타지는 않는다
+    two, par = reach.search(n, waits, {("bus", "s1"): 60.0}, limit_s=1e9, max_rides=2)
+    assert [n.patterns[leg[1]][2]["name"] for leg in reach.legs(n, par, ("bus", "t4"))[1] if leg[0] == "ride"] == ["A", "B"]
+    assert ("bus", "w5") not in two
 
 
 def test_rest_bound_stops_spreading_where_the_far_end_cannot_be_reached_in_time():
