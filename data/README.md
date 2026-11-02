@@ -35,6 +35,8 @@ $env:PYTHONUTF8="1"
 .\.venv\Scripts\python.exe data\scripts\build_bus_route_seq.py    # → processed/bus_route_stops.csv, reports/bus_route_stops.md
 .\.venv\Scripts\python.exe data\scripts\build_headway.py          # → processed/headway_bus.csv, headway_rail.csv, reports/headway.md
 .\.venv\Scripts\python.exe data\scripts\build_rail_runs.py        # → processed/rail_runs.csv · rail_express.csv
+.\.venv\Scripts\python.exe data\scripts\build_pop_grid.py         # → processed/pop_grid.csv (격자별 총인구)
+.\.venv\Scripts\python.exe data\scripts\build_road_net.py         # → processed/road_net.npz (공간 분석 택시 시간용 도로망)
 .\.venv\Scripts\python.exe data\scripts\build_subway_live_map.py  # → processed/subway_live_stations.csv, reports/subway_live_map.md
 .\.venv\Scripts\python.exe -m pytest data/tests
 ```
@@ -138,6 +140,8 @@ TAGO 의 WGS84 좌표로 넣는다(`in_db=0`). 2026-10-29 수집분: 362 노선 
 | 경기 버스 노선–정류소 · 노선(유형) | 경기도 버스정보 기반정보 — 공공데이터포털(data.go.kr) 15080658 (`fetch_gbis.py`) | `external/gbis/<버전>/routestation<버전>V2.txt` · `route<버전>V2.txt` | 이용허락범위 제한 없음 |
 | 대중교통 시각표(GTFS) | KTDB 국가교통DB 대중교통 GTFS 기반정보 (2025년 3월 평일 1일, 자료신청) | `csv/대중교통GTFS(2025년 기준)/202503_GTFS_DataSet/` | 자료 제공 조건 |
 | 서울 지하철 실시간 도착 역정보 | 서울 열린데이터광장 [OA-12764](https://data.seoul.go.kr/dataList/OA-12764/F/1/datasetView.do) 지하철 실시간 도착정보의 역 목록 | `csv/실시간도착_역정보(20260902).xlsx` | 공공누리 1유형 — 출처 표시 |
+| 도로망 | KTDB 국가교통DB 2025년 수도권 OD · 네트워크 (2024 노드링크, 자료신청) | `nodeLink/01. Node_Link data/2024node.txt` · `2024link.txt` | 자료 제공 조건 |
+| 격자별 인구 | 통계청 SGIS 자료제공 — 격자통계(인구) 2024년, 500 m · 1 km (100 km 칸 가사 · 가아 · 나바 · 나사 · 다바 · 다사 · 다아 · 라바 · 라사) | `population/_census_*/2024년_인구_<칸>_<크기>.csv` · 경계 `population/_grid_border_*/` | 자료 제공 조건 |
 | 행정경계 | [vuski/admdongkor](https://github.com/vuski/admdongkor) `ver20260701` (원천 통계청 SGIS) | `external/admdongkor/HangJeongDong_ver20260701.geojson` | CC BY 4.0 — **출처 표기 의무** |
 
 행정경계를 보여 주는 지도·보고서에는 다음을 표기한다.

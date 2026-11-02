@@ -27,7 +27,7 @@ import kgrid
 from grid_cbd import DESTS
 
 HYBRID = ("first", "last", "both")
-RATIO_CUT = 1.5    # 유형을 가르는 시간비 — 서울 격자 중앙(약 1.6배) 아래
+RATIO_CUT = 1.5    # 유형을 가르는 시간비 — 문헌의 대중교통 경쟁력 기준(TCQSM 3판 · 스톡홀름 분담률, method.md E48). 모델 분포와 무관하게 둔다
 CLOSE_CUT = 0.5    # 유형을 가르는 회수율 — 격차의 절반
 HYBRID_ONLY = -1   # close 에서 '하이브리드로만 갈 수 있음'
 

@@ -17,6 +17,8 @@ __pycache__/
 
 # 원본 데이터 (공공데이터포털에서 받는다 — data/README.md 출처표)
 data/csv/
+data/population/
+data/nodeLink/
 
 # 재생성 가능한 데이터 (스크립트로 다시 만든다)
 data/external/
@@ -47,3 +49,5 @@ analysis_kit/
 # 기타 파일
 explain_mat/
 tmp/
+*.docx
+*.db
