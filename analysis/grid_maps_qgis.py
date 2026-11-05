@@ -40,7 +40,12 @@ TYPES = [("good", "#2c6fbb", "대중교통 양호 (시간비 1.5 미만)"), ("fi
          ("trunk", "#d64545", "간선 부족 (회수율 50% 미만)"), ("hybrid_only", "#8e5cc4", "하이브리드로만 갈 수 있음"),
          ("nohybrid", "#b8a07e", "택시 예산 < 기본요금|(가까워서 택시를 섞을 여지 없음)")]
 NOHYBRID = ("#b8a07e", "택시 예산 < 기본요금|(가까워서 택시를 섞을 여지 없음)")   # save · close 에서도 같은 색
-CONDITION = (f"탑승 ≤ {PARAMS['max_rides']}번 · 택시비 합 ≤ "   # 제목 오른쪽에 붙인다
+OUTBOUND = "_out" in os.path.basename(GRID)   # noqa: F821 — grid_cbd.py --method outbound(도심 → 칸): 도심이 출발지다
+END = "출발지" if OUTBOUND else "도착지"   # 수단 이름(출발 택시 · 도착 택시)은 방향과 무관하게 맞는다
+BAND_TIME = {"평시": "14:00", "첨두": "08:00", "퇴근": "18:00", "새벽": "05:30"}   # grid_cbd.BANDS 의 시각(모두 수요일)
+_band = PARAMS["src"].split("_")[2]   # grid_cbd_<시각대 또는 --at 의 20261104T0830>_…
+AT = f"평일 {BAND_TIME[_band]}" if _band in BAND_TIME else f"{_band[4:6]}/{_band[6:8]} {_band[9:11]}:{_band[11:13]}"
+CONDITION = (f"{AT} · 탑승 ≤ {PARAMS['max_rides']}번 · 택시비 합 ≤ "   # 제목 오른쪽에 붙인다
              + (f"택시만 요금 × {PARAMS['cap_ratio']:g}" if PARAMS.get("cap_ratio") else f"{PARAMS['cap']:,.0f}원"))
 
 
@@ -141,7 +146,7 @@ def make(name, title, renderer_for, show_base, formula=None):
         m.setFrameEnabled(True)
         m.setFrameStrokeWidth(QgsLayoutMeasurement(0.2))
         lay.addLayoutItem(m)
-        text(lay, f"도착지: {n} ({k})", 8 + i * 80, 109, 78, 6, 9.5, True)
+        text(lay, f"{END}: {n} ({k})", 8 + i * 80, 109, 78, 6, 9.5, True)
     leg = QgsLayoutItemLegend(lay)
     leg.setAutoUpdateModel(False)
     # 범례가 가진 트리를 비워 쓴다 — 새 QgsLayerTree 를 넘기면 함수가 끝날 때 파이썬이 지워 범례가 빈 메모리를 가리키고
@@ -167,7 +172,7 @@ def make(name, title, renderer_for, show_base, formula=None):
     print(name, QgsLayoutExporter(lay).exportToImage(path, settings), path)
 
 
-make("best", "도심까지 가장 빠른 수단", categorized(BEST), False)
+make("best", "도심에서 가장 빠른 수단" if OUTBOUND else "도심까지 가장 빠른 수단", categorized(BEST), False)
 make("ratio", "대중교통 ÷ 택시 소요시간", graduated(RATIO), True)
 make("save", "하이브리드 경로로 아끼는 시간", with_nohybrid(SAVE), True)
 make("won", "택시를 섞을 때 아낀 1분당 추가 비용", graduated(WON), True)
@@ -212,7 +217,7 @@ for name in ("ratio", "save", "won", "close", "type"):
 write(sgg, "sgg")
 write(dests, "dests")
 
-for table, layer in (("sgg", sgg), ("dests", pts["CBD"])):
+for table, layer in (("sgg", sgg), ("dests", pts[DESTS[0][0]])):
     saved = QgsVectorLayer(f"{GPKG}|layername={table}", table, "ogr")
     saved.setRenderer(layer.renderer().clone())
     saved.saveStyleToDatabase(table, "", True, "")

@@ -8,13 +8,16 @@
 - **택시 요금 상한** `cap_first` · `cap_last` (`CAPS`, 택시 한 번당): 그 요금 안에 택시로 가는 정류장(30분 안)만 쓴다.
 - **출발 시각** (`--band` 평시 · 첨두 · 새벽, 또는 `--at`): 배차 · 운행 시간 · 택시 시간과 요금이 시각마다 달라 시각마다 따로 돌린다.
 
-택시 시간 · 요금은 도로망 최단 경로로 잰다(`roadnet.py`, 계수는 평일 14:00 기준 — 다른 시각은 시간에 시간대 배수를 곱한다). 요금에 저속 시간요금 · 통행료가 들어간다.
+택시 시간 · 요금은 도로망 최단 경로로 잰다(`roadnet.py`, 계수는 평일 14:00 기준 — 다른 시각은 시간에 시간대 배수를 곱한다, 평일 출퇴근은 방향 · 거리별 `TAXI_PEAK`). 요금에 저속 시간요금 · 통행료가 들어간다.
+평일 출퇴근의 버스 차내 시간은 칸별 TPSS 배수를 곱한다(`_bus_peak`). 버스 배차는 시각과 무관한 값 그대로다 — TPSS 운행횟수의 08시 ÷ 14시가 노선 중앙 1.00 이었다.
 
 **계산 방식** (`--method`, method.md E46):
 
 - `backward`(기본): 도착지마다 거꾸로 펼쳐(걸어서 내림 1 · 도착 택시 상한마다 1) 회차별 '정류장 → 도착지' 시간 표를 한 번 만들고,
   출발점은 걸어서 탈 정류장(1 km) · 택시로 갈 정류장에서 표의 최솟값만 고른다 — 출발점 수와 거의 무관하다.
 - `forward`: 출발 칸마다 앞으로 펼친다(걸어서 1 · 출발 택시 상한마다 1) — 견주기용. 탐색이 앞 · 뒤 같은 답을 낸다(서울 99.8%).
+- `outbound`: 방향을 뒤집어 **도심 → 칸**(퇴근)을 잰다. 도심마다 앞으로 펼쳐(걸어서 탐 1 · 도심 쪽 택시 상한마다 1) 표를 만들고, 칸은 걸어서 내릴 정류장 · 택시로 올
+  정류장에서 고른다. 행의 `dest` 는 그 도심(여기서는 출발지), `first` 는 도심 쪽 택시, `last` 는 칸 쪽 택시다. 파일 이름에 `_out` 이 붙는다.
 
 한 행 = (칸, 도착지, 수단, cap_first, cap_last, max_rides) 의 최소 시간 경로 하나. 수단:
 
@@ -51,11 +54,17 @@ BATCH_CELLS = 500            # 일꾼에게 한 번에 맡기는 칸 수
 # 택시 한 번의 요금 상한(원) — 분석에서 고른다(통행 택시비의 비율 상한 등). 4,800원은 기본요금 — 택시를 잠깐이라도 섞는 최소 비용.
 # 고른 상한이 두 값 사이면 아래 값으로 계산한 경로만 쓰므로 촘촘할수록 근사가 작다. 상한 하나가 탐색 한 번이다
 CAPS = (4800, 6000, 7000, 8500, 10000, 12000, 15000, 20000, 30000)
-BANDS = {"평시": "2026-11-04T14:00", "첨두": "2026-11-04T08:00", "새벽": "2026-11-04T05:30"}   # 수요일
+BANDS = {"평시": "2026-11-04T14:00", "첨두": "2026-11-04T08:00", "퇴근": "2026-11-04T18:00", "새벽": "2026-11-04T05:30"}   # 수요일
 DESTS = {"CBD": ("광화문", 126.9765, 37.5709), "GBD": ("강남", 127.0276, 37.4979), "YBD": ("여의도", 126.9243, 37.5216)}
 SIDOS = ("서울특별시", "인천광역시", "경기도")
 # 통합요금 · 환승할인 밖의 노선은 뺀다 — 시간만 보는 탐색이 정류장이 적은 공항 리무진을 시내 짧은 구간에 끼워 탔다(method.md E45)
 EXCLUDED_TYPES = frozenset({"공항", "시외", "관광"})
+# 평일 출퇴근 택시 시간 ÷ 14:00 — 오전 · 오후 × (도심으로 들어옴, 도심에서 나감) × 직선 거리(`TAXI_PEAK_KM`). 방향은 광화문까지 거리가 줄면 들어옴이다.
+# 수요일 08 · 14 · 18시 출발 지정 300 OD(인구 비례, 왕복)의 중앙값. 반으로 나눈 확인에서 단일 1.20 보다 오차가 작았고(로그 절대 0.134 → 0.107,
+# 18시 0.125 → 0.103), 맞출 때 쓰지 않은 18시 실시간 100구간도 편향 -22% → -4% 로 줄었다
+TAXI_PEAK = {"am": ((1.18, 1.27, 1.59, 1.29), (1.06, 1.19, 1.07, 1.14)),
+             "pm": ((1.16, 1.32, 1.27, 1.19), (1.22, 1.41, 1.62, 1.28))}
+TAXI_PEAK_KM = (6.4, 12.3, 23.4, 52.3)   # 값이 놓이는 직선 거리(각 거리대의 표본 중앙) — 사이는 선으로 이어 거리 경계에서 시간이 끊기지 않게 한다
 _G = {}
 
 
@@ -85,6 +94,17 @@ def grid_cells(boundaries, cell_m):
     return out
 
 
+def _bus_peak(net, column):
+    """버스 패턴의 누적 차내 시간에 칸별 출퇴근 배수를 곱한다(`data/scripts/build_bus_peak.py`). 표에 없는 칸은 그대로 둔다."""
+    with gzip.open(ROOT / "data" / "processed" / "bus_hop_peak.csv.gz", "rt", encoding="utf-8", newline="") as f:
+        mult = {(r["route_id"], r["stop_key"], r["next_key"]): float(r[column]) for r in csv.DictReader(f)}
+    for kind, rid, _, nodes, cum in net.patterns:
+        if kind == "bus":
+            hops = [(cum[i + 1] - cum[i]) * mult.get((rid, nodes[i][1], nodes[i + 1][1]), 1.0) for i in range(len(nodes) - 1)]
+            for i, s in enumerate(hops):
+                cum[i + 1] = cum[i] + s
+
+
 def _init(at_iso, method):
     import numpy as np
     import algo  # noqa: F401
@@ -93,15 +113,22 @@ def _init(at_iso, method):
     from app.config import load_settings
     from roadnet import ACCESS_MPS, LOW_SPEED_WON_PER_S, RoadNet
     dbs = load_dbs(load_settings())
-    net = reach.network(dbs["stops"], dbs["routes"], dbs["lines"], EXCLUDED_TYPES)
+    net = reach.Network(dbs["stops"], dbs["routes"], dbs["lines"], EXCLUDED_TYPES)   # 시각마다 차내 시간이 달라 캐시하지 않는다
     at = datetime.fromisoformat(at_iso)
+    peak = None
+    if anchors.taxi_band(at) == "peak":
+        half = "am" if at.hour < 12 else "pm"
+        peak = np.array(TAXI_PEAK[half])
+        _bus_peak(net, "r_" + half)
     _G.update(np=np, anchors=anchors, fares=fares, reach=reach, search=search, dbs=dbs, net=net, at=at,
               waits=reach._Waits(net, dbs["headway"], dbs["hours"], at), cache={},
-              road=RoadNet(), band=anchors.TAXI_BAND[anchors.taxi_band(at)], low_speed=LOW_SPEED_WON_PER_S, access_mps=ACCESS_MPS)
+              road=RoadNet(), band=anchors.TAXI_BAND[anchors.taxi_band(at)], peak=peak, low_speed=LOW_SPEED_WON_PER_S, access_mps=ACCESS_MPS)
     _road_stops_init()
-    _G["dests"] = {k: _dest(lon, lat) for k, (_, lon, lat) in DESTS.items()}
+    _G["dests"] = {k: (_origin if method == "outbound" else _dest)(lon, lat) for k, (_, lon, lat) in DESTS.items()}
     if method == "backward":
         _back_tables()
+    elif method == "outbound":
+        _back_tables(backward=False)
     else:
         _G["outs"] = {n for d in _G["dests"].values() for n in (*d["walk"], *(t[0] for t in d["taxi"]))}
 
@@ -117,6 +144,24 @@ def _nodes_near(pt, radius_m):
             if node in net.at and dist < out.get(node, (math.inf,))[0]:
                 out[node] = (dist, row.get("sgg_nm"))
     return out
+
+
+def _straight_m(lon1, lat1, lon2, lat2):
+    np = _G["np"]
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    h = np.sin((p2 - p1) / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(lon2 - lon1) / 2) ** 2
+    return 2 * 6371008.8 * np.arcsin(np.sqrt(h))
+
+
+def _band(lon1, lat1, lon2, lat2, straight_m):
+    """택시 한 번의 시간대 배수 — 평일 출퇴근은 방향 · 거리별(`TAXI_PEAK`), 그 밖은 시각 하나의 값."""
+    np, peak = _G["np"], _G["peak"]
+    if peak is None:
+        return _G["band"]
+    lon0, lat0 = DESTS["CBD"][1:]
+    out = _straight_m(lon2, lat2, lon0, lat0) > _straight_m(lon1, lat1, lon0, lat0)
+    km = np.asarray(straight_m) / 1000.0
+    return np.where(out, np.interp(km, TAXI_PEAK_KM, peak[1]), np.interp(km, TAXI_PEAK_KM, peak[0]))
 
 
 def _taxi(eta_s, road_km, toll, sgg_a, sgg_b, connect):
@@ -148,18 +193,17 @@ def _road_stops_init():
     _G["rs"] = {"keys": keys, "node": np.array(node), "acc": np.array(acc), "lon": np.array(lon), "lat": np.array(lat), "sgg": sgg}
 
 
-def _taxi_stops(pt, reverse):
-    """pt 에서(reverse 면 pt 까지) 택시로 30분 안 · 약 150 m 이상인 정류장 → [(정류장, ETA 초, 도로 km, 통행료, 시군구)] · 도로망 표 (W, km, 통행료)."""
-    np, road, rs, a, band = _G["np"], _G["road"], _G["rs"], _G["anchors"], _G["band"]
+def _taxi_stops(pt, reverse, whole=None):
+    """pt 에서(reverse 면 pt 까지) 택시로 30분 안 · 약 150 m 이상인 정류장 → [(정류장, ETA 초, 도로 km, 통행료, 시군구)] · 도로망 표 (W, km, 통행료).
+    whole: 도로망 표를 30분 밖까지 채운다 — 전체 경로 시간을 읽을 때. 기본은 reverse 와 같다."""
+    np, road, rs, a, peak = _G["np"], _G["road"], _G["rs"], _G["anchors"], _G["peak"]
     v, s = road.snap(*pt)
-    w, km, won = road.trace(v, limit=a.T_MAX_S / band if not reverse else np.inf, reverse=reverse)
+    w, km, won = road.trace(v, limit=np.inf if (reverse if whole is None else whole) else a.T_MAX_S / (_G["band"] if peak is None else peak.min()), reverse=reverse)
     acc = s + rs["acc"]
+    d = _straight_m(pt[0], pt[1], rs["lon"], rs["lat"])
+    band = _band(rs["lon"], rs["lat"], pt[0], pt[1], d) if reverse else _band(pt[0], pt[1], rs["lon"], rs["lat"], d)
     eta = road.eta(w[rs["node"]], acc) * band
-    idx = np.where(np.isfinite(eta) & (eta <= a.T_MAX_S))[0]
-    p1, p2 = np.radians(pt[1]), np.radians(rs["lat"][idx])
-    h = np.sin((p2 - p1) / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(rs["lon"][idx] - pt[0]) / 2) ** 2
-    d = 2 * 6371008.8 * np.arcsin(np.sqrt(h))
-    keep = idx[d >= a.TAXI_MIN_M]
+    keep = np.where(np.isfinite(eta) & (eta <= a.T_MAX_S) & (d >= a.TAXI_MIN_M))[0]
     road_km = km[rs["node"][keep]] + acc[keep] * _G["access_mps"] / 1000
     toll = won[rs["node"][keep]]
     return ([(rs["keys"][i], float(eta[i]), float(k), float(t), rs["sgg"][i]) for i, k, t in zip(keep, road_km, toll)], (w, km, won))
@@ -179,6 +223,31 @@ def _dest(lon, lat):
             taxi.append((n, ts, tf, _cap_index(tf)))
     return {"pt": (lon, lat), "sgg": sgg, "walk": walk, "taxi": taxi, "taxi_fare": {t[0]: t[2] for t in taxi},
             "rev": table, "access": _G["road"].snap(lon, lat)[1]}
+
+
+def _origin(lon, lat):
+    """출발지(도심 → 칸) → `_dest` 와 같은 꼴 — 걸어서 타는 정류장 · 택시로 갈 수 있는 정류장(뒤에 탈 차가 있다) · 시군구 · 도로망 앞으로 전체 경로 시간."""
+    a = _G["anchors"]
+    sgg = (_G["dbs"]["stops"].row("bus", _G["dbs"]["stops"].near("bus", lon, lat, 2000.0)[0][0]) or {}).get("sgg_nm")
+    walk = {n: a.walk_s(d) for n, (d, _) in _nodes_near((lon, lat), ACCESS_M).items()}
+    stops, table = _taxi_stops((lon, lat), False, whole=True)
+    taxi = []
+    for n, eta, km, toll, s in stops:
+        ts, tf = _taxi(eta, km, toll, sgg, s, True)
+        if _cap_index(tf) is not None:
+            taxi.append((n, ts, tf, _cap_index(tf)))
+    return {"pt": (lon, lat), "sgg": sgg, "walk": walk, "taxi": taxi, "taxi_fare": {t[0]: t[2] for t in taxi},
+            "fwd": table, "access": _G["road"].snap(lon, lat)[1]}
+
+
+def _last_taxi(d, sgg):
+    """정류장에서 도착 칸까지 택시(30분 안 · 약 150 m 이상 · 가장 큰 상한 안) → {정류장: (택시 초, 택시 요금)}."""
+    out = {}
+    for n, eta, km, toll, s in _taxi_stops(d, True, whole=False)[0]:
+        ts, tf = _taxi(eta, km, toll, s, sgg, False)
+        if tf <= CAPS[-1]:
+            out[n] = (ts, tf)
+    return out
 
 
 def _first_taxi(o, sgg):
@@ -216,9 +285,27 @@ def _base(cell, key, dest):
     a = _G["anchors"]
     acc = s + dest["access"]
     if _G["np"].isfinite(w):
-        ts, tf = _taxi(float(_G["road"].eta(w, acc) * _G["band"]), float(km + acc * _G["access_mps"] / 1000), float(won), sgg, dest["sgg"], False)
+        ts, tf = _taxi(float(_G["road"].eta(w, acc) * _band(lon, lat, *dest["pt"], base["straight_m"])), float(km + acc * _G["access_mps"] / 1000), float(won), sgg, dest["sgg"], False)
     else:   # 도로망에 닿지 않는 칸(연결이 끊긴 섬 노드)만 거리 곡선으로 잰다
         ts, tf = _taxi(a.taxi_s_for(base["straight_m"], _G["at"]), a.road_km(base["straight_m"]), 0.0, sgg, dest["sgg"], False)
+    taxi = {**base, "mode": "taxi", "cap_first": "", "cap_last": "", "max_rides": 0, "time_s": round(ts),
+            "rides": 0, "transit_fare": 0, "taxi_fare": round(tf), "uncertain": 0}
+    return base, taxi
+
+
+def _base_out(cell, key, origin):
+    """`_base` 의 거울 — 도심 → 칸 택시만."""
+    cid, lon, lat, sido, sgg = cell
+    base = {"cell": cid, "lon": round(lon, 5), "lat": round(lat, 5), "sido": sido, "sgg": sgg, "dest": key,
+            "straight_m": round(haversine_m(*origin["pt"], lon, lat))}
+    v, s = _G["road"].snap(lon, lat)
+    w, km, won = (t[v] for t in origin["fwd"])
+    a = _G["anchors"]
+    acc = s + origin["access"]
+    if _G["np"].isfinite(w):
+        ts, tf = _taxi(float(_G["road"].eta(w, acc) * _band(*origin["pt"], lon, lat, base["straight_m"])), float(km + acc * _G["access_mps"] / 1000), float(won), origin["sgg"], sgg, False)
+    else:
+        ts, tf = _taxi(a.taxi_s_for(base["straight_m"], _G["at"]), a.road_km(base["straight_m"]), 0.0, origin["sgg"], sgg, False)
     taxi = {**base, "mode": "taxi", "cap_first": "", "cap_last": "", "max_rides": 0, "time_s": round(ts),
             "rides": 0, "transit_fare": 0, "taxi_fare": round(tf), "uncertain": 0}
     return base, taxi
@@ -235,9 +322,9 @@ def _row(base, cap_first, cap_last, k, t, info, taxi_fare):
 
 # --- 거꾸로(backward): 도착지마다 표 한 번, 출발점은 표에서 고르기
 
-def _back_tables():
+def _back_tables(backward=True):
     """도착지 × (걸어서 내림 · 도착 택시 상한) 마다 거꾸로 펼친 회차별 표 → _G["tables"][(도착지, cap_last)] = [(초 배열, 부모 배열)] × 회차.
-    배열은 정류장 번호(_G["index"]) 순서, 닿지 못한 정류장은 inf."""
+    배열은 정류장 번호(_G["index"]) 순서, 닿지 못한 정류장은 inf. backward=False 면 도심에서 앞으로 펼치고 키의 상한은 cap_first 다."""
     np, reach, net, waits = _G["np"], _G["reach"], _G["net"], _G["waits"]
     nodes = list(net.at)
     index = {n: i for i, n in enumerate(nodes)}
@@ -261,7 +348,7 @@ def _back_tables():
                 snaps[k] = (t, pp)
 
             if seeds:
-                reach.search(net, waits, seeds, limit_s=LIMIT_S, max_rides=MAX_RIDES, backward=True, on_round=on_round)
+                reach.search(net, waits, seeds, limit_s=LIMIT_S, max_rides=MAX_RIDES, backward=backward, on_round=on_round)
             per, last = [], empty
             for k in range(1, MAX_RIDES + 1):
                 last = snaps.get(k, last)
@@ -308,6 +395,47 @@ def _one_back(cell):
                         info = _path_info(pp[fi[j]], nodes[fi[j]], backward=True)
                         ltf = dest["taxi_fare"][info[3]] if cap_last is not None else 0.0
                         rows.append(_row(base, c, cap_last, k, v[j], info, ftf[j] + ltf))
+    return rows
+
+
+def _one_out(cell):
+    """`_one_back` 의 거울 — 도심에서 앞으로 펼친 표에 칸 쪽 끝(걸어서 내림 · 택시로 옴)을 붙인다."""
+    np, index, nodes, tables, a = _G["np"], _G["index"], _G["nodes"], _G["tables"], _G["anchors"]
+    cid, lon, lat, sido, sgg = cell
+    near = _nodes_near((lon, lat), ACCESS_M)
+    wi = np.array([index[n] for n in near], dtype=np.int64)
+    wv = np.array([a.walk_s(d) for d, _ in near.values()])
+    last = _last_taxi((lon, lat), sgg)
+    order = sorted(last, key=lambda n: last[n][1])   # 택시 요금 순 — 상한마다 앞부분에서 최솟값
+    fi = np.array([index[n] for n in order], dtype=np.int64)
+    lts = np.array([last[n][0] for n in order])
+    ltf = np.array([last[n][1] for n in order])
+    upto = [int(np.searchsorted(ltf, c, side="right")) for c in CAPS]
+    ar = np.arange(len(fi))
+    rows = []
+    for key, origin in _G["dests"].items():
+        base, taxi_row = _base_out(cell, key, origin)
+        rows.append(taxi_row)
+        for cap_first in (None, *CAPS):
+            for k, (t, pp) in enumerate(tables[(key, cap_first)], 1):
+                if len(wi):   # 걸어서 내린다 — 대중교통만 · 도심 쪽 택시
+                    v = wv + t[wi]
+                    j = int(np.argmin(v))
+                    if np.isfinite(v[j]):
+                        info = _path_info(pp[wi[j]], nodes[wi[j]])
+                        ftf = origin["taxi_fare"][info[3]] if cap_first is not None else 0.0
+                        rows.append(_row(base, cap_first, None, k, v[j], info, ftf))
+                if len(fi):   # 택시로 온다 — 상한 안 정류장의 앞부분 최솟값(누적)
+                    v = lts + t[fi]
+                    pm = np.minimum.accumulate(v)
+                    at = np.maximum.accumulate(np.where(v <= pm, ar, -1))
+                    for c, u in zip(CAPS, upto):
+                        if u == 0 or not np.isfinite(pm[u - 1]):
+                            continue
+                        j = int(at[u - 1])
+                        info = _path_info(pp[fi[j]], nodes[fi[j]])
+                        ftf = origin["taxi_fare"][info[3]] if cap_first is not None else 0.0
+                        rows.append(_row(base, cap_first, c, k, v[j], info, ftf + ltf[j]))
     return rows
 
 
@@ -382,7 +510,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="격자 × 도심 세 곳 — 대중교통 · 택시 · 하이브리드 (내부 추정)")
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--cell", type=int, default=1000, help="격자 칸 크기(m) — 국가 격자(EPSG:5179) 배수")
-    ap.add_argument("--method", choices=("backward", "forward"), default="backward")
+    ap.add_argument("--method", choices=("backward", "forward", "outbound"), default="backward")
     ap.add_argument("--limit", type=int, default=0, help="고르게 N 칸만 (시험용)")
     ap.add_argument("--sido", choices=SIDOS, default=None, help="이 시도의 칸만 출발점으로 (도착지는 그대로)")
     ap.add_argument("--band", choices=list(BANDS), default=None, help="출발 시각대 — " + " · ".join(
@@ -400,12 +528,12 @@ def main(argv=None):
     if args.limit:
         cells = cells[:: max(1, len(cells) // args.limit)][: args.limit]
     tag = (args.band or at[:16].replace(":", "").replace("-", "")) + (f"_{args.sido[:2]}" if args.sido else "")
-    tag += f"_{args.cell}m" + ("_fwd" if args.method == "forward" else "")
+    tag += f"_{args.cell}m" + {"forward": "_fwd", "outbound": "_out"}.get(args.method, "")
     out = args.out or ROOT / "analysis" / "out" / f"grid_cbd_{tag}.csv.gz"
     out.parent.mkdir(parents=True, exist_ok=True)
     print("격자 %d m · %d 칸 × 도착지 %d = OD %d · 시각 %s · %s · 일꾼 %d → %s" % (
         args.cell, len(cells), len(DESTS), len(cells) * len(DESTS), at, args.method, args.workers, out), flush=True)
-    one = _one_back if args.method == "backward" else _one_forward
+    one = {"backward": _one_back, "forward": _one_forward, "outbound": _one_out}[args.method]
     t0, done = time.perf_counter(), 0
     with gzip.open(out, "wt", encoding="utf-8", newline="", compresslevel=6) as f, \
             ProcessPoolExecutor(args.workers, initializer=_init, initargs=(at, args.method)) as pool:
